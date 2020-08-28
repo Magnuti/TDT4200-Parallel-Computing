@@ -31,8 +31,38 @@ void rotateImage(uchar *image)
 	}
 }
 
-void scaleUp(uchar *image)
+void scaleUp(uchar *image, uchar *newImage)
 {
+	const int rowLength = XSIZE * 3 * 2;
+
+	// We don't want to divide by zero, so the first line is exluded from the loop
+	for (int k = 0; k < 3; k++)
+	{
+		int pixelValue = image[k];
+
+		newImage[k] = pixelValue;
+		newImage[3 + k] = pixelValue;
+		newImage[rowLength + k] = pixelValue;
+		newImage[3 + rowLength + k] = pixelValue;
+	}
+
+	int length = XSIZE * YSIZE * 3;
+	for (int i = 3; i < length; i += 3)
+	{
+		int rowNumber = i / (XSIZE * 3);
+		int rows = rowNumber * rowLength;
+		int scaledXIndex = i * 2;
+
+		for (int k = 0; k < 3; k++)
+		{
+			int pixelValue = image[i + k];
+
+			newImage[scaledXIndex + rows + k] = pixelValue;
+			newImage[3 + scaledXIndex + rows + k] = pixelValue;
+			newImage[scaledXIndex + rows + rowLength + k] = pixelValue;
+			newImage[3 + scaledXIndex + rows + rowLength + k] = pixelValue;
+		}
+	}
 }
 
 int main()
@@ -44,11 +74,12 @@ int main()
 
 	revertColors(image);
 	rotateImage(image);
-	scaleUp(image);
 
-	// Stop altering
+	uchar *newImage = calloc(XSIZE * YSIZE * 3 * 4, 1); // Double size in both directions
+	scaleUp(image, newImage);
 
-	savebmp("after.bmp", image, XSIZE, YSIZE);
+	savebmp("after.bmp", newImage, XSIZE * 2, YSIZE * 2);
 	free(image);
+	free(newImage);
 	return 0;
 }
