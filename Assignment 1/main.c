@@ -1,7 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "bitmap.h"
-#include "bitmap.c"
 
 #define XSIZE 2560 // Size of before image
 #define YSIZE 2048
