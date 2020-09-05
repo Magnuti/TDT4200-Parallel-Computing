@@ -1,9 +1,16 @@
-*
+# Common
+*.zip
+*.one
+*.docx
+*.exe
+*.onetoc2
+*.ppt
 
-# Ignore everything but these files
-!.gitignore
-!*/
-!*.c
-!*.h
-!*.bmp
-!Makefile
+# C
+*.o
+
+# Assignment 1
+**/Assignment 1/bitmap
+**/Assignment 1/after.bmp
+
+# Assignment 2
