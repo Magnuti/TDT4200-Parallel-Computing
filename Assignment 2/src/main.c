@@ -5,6 +5,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <mpi.h>
+
 #include "util.h"
 
 static bool run_master(int argc, char **argv);
@@ -22,8 +24,25 @@ static void handle_overview_result(Options *options, OverviewCrackResult *overvi
  */
 int main(int argc, char **argv)
 {
-    bool success = run_master(argc, argv);
-    return success ? EXIT_SUCCESS : EXIT_FAILURE;
+    int mpi_size; // Number of processes
+    int my_rank;  // The rank of this process
+
+    MPI_Init(NULL, NULL);
+    MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+
+    if (my_rank == 0)
+    {
+        bool success = run_master(argc, argv);
+        MPI_Finalize();
+        return success ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    else
+    {
+        printf("Greetings from process %d of %d\n", my_rank, mpi_size);
+        MPI_Finalize();
+        return 0;
+    }
 }
 
 /*
@@ -67,6 +86,9 @@ static bool run_master(int argc, char **argv)
  */
 static bool init_master(Options *options, Dictionary *dict, FILE **shadow_file, FILE **result_file, int argc, char **argv)
 {
+    int mpi_size; // Numer of processes
+    MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
+
     // Parse CLI args
     if (!parse_cli_args(options, argc, argv))
     {
@@ -77,8 +99,7 @@ static bool init_master(Options *options, Dictionary *dict, FILE **shadow_file, 
     // Print some useful info
     if (!options->quiet)
     {
-        // TODO
-        //printf("Workers: %d\n", mpi_size);
+        printf("Workers: %d\n", mpi_size);
         printf("Max symbols: %ld\n", options->max_length);
         printf("Symbol separator: \"%s\"\n", options->separator);
     }
@@ -167,8 +188,7 @@ static void master_crack(ExtendedCrackResult *result, Options *options, Dictiona
     CrackResult *results = calloc(1, sizeof(CrackResult));
 
     // Start time measurement
-    // TODO
-    double start_time = 0;
+    double start_time = MPI_Wtime();
 
     // Try probes until the status changes (when a match is found or the search space is exhausted)
     while (result->status == STATUS_PENDING)
@@ -208,8 +228,7 @@ static void master_crack(ExtendedCrackResult *result, Options *options, Dictiona
     }
 
     // End time measurement
-    // TODO
-    double end_time = 0;
+    double end_time = MPI_Wtime();
     result->duration = end_time - start_time;
 
     free(config.dict_positions);
