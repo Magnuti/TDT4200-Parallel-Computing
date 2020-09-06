@@ -20,7 +20,8 @@ static void handle_overview_result(Options *options, OverviewCrackResult *overvi
 /*
  * Main entrypoint.
  */
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     bool success = run_master(argc, argv);
     return success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
@@ -28,7 +29,8 @@ int main(int argc, char **argv) {
 /*
  * Entrypoint for master.
  */
-static bool run_master(int argc, char **argv) {
+static bool run_master(int argc, char **argv)
+{
     Options options = {};
     Dictionary dict = {};
     FILE *shadow_file = NULL;
@@ -37,13 +39,16 @@ static bool run_master(int argc, char **argv) {
     bool init_success = init_master(&options, &dict, &shadow_file, &result_file, argc, argv);
 
     // If init successful, try to crack all shadow entries
-    if (!options.quiet) {
+    if (!options.quiet)
+    {
         printf("\nEntries:\n");
     }
     OverviewCrackResult overview_result = {};
-    if (init_success) {
+    if (init_success)
+    {
         ShadowEntry shadow_entry;
-        while (get_next_shadow_entry(&shadow_entry, shadow_file)) {
+        while (get_next_shadow_entry(&shadow_entry, shadow_file))
+        {
             ExtendedCrackResult result;
             master_crack(&result, &options, &dict, &shadow_entry);
             handle_result(&options, &result, &overview_result, result_file);
@@ -60,15 +65,18 @@ static bool run_master(int argc, char **argv) {
 /*
  * Initialize master stuff.
  */
-static bool init_master(Options *options, Dictionary *dict, FILE **shadow_file, FILE **result_file, int argc, char **argv) {
+static bool init_master(Options *options, Dictionary *dict, FILE **shadow_file, FILE **result_file, int argc, char **argv)
+{
     // Parse CLI args
-    if (!parse_cli_args(options, argc, argv)) {
+    if (!parse_cli_args(options, argc, argv))
+    {
         master_cleanup(*shadow_file, *result_file, dict);
         return false;
     }
 
     // Print some useful info
-    if (!options->quiet) {
+    if (!options->quiet)
+    {
         // TODO
         //printf("Workers: %d\n", mpi_size);
         printf("Max symbols: %ld\n", options->max_length);
@@ -76,28 +84,35 @@ static bool init_master(Options *options, Dictionary *dict, FILE **shadow_file, 
     }
 
     // Open shadow file
-    if (!options->quiet) {
+    if (!options->quiet)
+    {
         printf("Shadow file: %s\n", options->shadow_file);
     }
-    if (!open_file(shadow_file, options->shadow_file, "r")) {
+    if (!open_file(shadow_file, options->shadow_file, "r"))
+    {
         master_cleanup(*shadow_file, *result_file, dict);
         return false;
     }
     // Open output file if provided
-    if (options->result_file[0] != 0) {
-        if (!options->quiet) {
+    if (options->result_file[0] != 0)
+    {
+        if (!options->quiet)
+        {
             printf("Output file: %s\n", options->result_file);
         }
-        if (!open_file(result_file, options->result_file, "w")) {
+        if (!open_file(result_file, options->result_file, "w"))
+        {
             master_cleanup(*shadow_file, *result_file, dict);
             return false;
         }
     }
     // Read full directory
-    if (!options->quiet) {
+    if (!options->quiet)
+    {
         printf("Dictionary file: %s\n", options->dict_file);
     }
-    if (!read_dictionary(dict, options, options->dict_file)) {
+    if (!read_dictionary(dict, options, options->dict_file))
+    {
         master_cleanup(*shadow_file, *result_file, dict);
         return false;
     }
@@ -108,14 +123,18 @@ static bool init_master(Options *options, Dictionary *dict, FILE **shadow_file, 
 /*
  * Cleanup master stuff.
  */
-static void master_cleanup(FILE *shadow_file, FILE *result_file, Dictionary *dict) {
-    if (shadow_file) {
+static void master_cleanup(FILE *shadow_file, FILE *result_file, Dictionary *dict)
+{
+    if (shadow_file)
+    {
         fclose(shadow_file);
     }
-    if (result_file) {
+    if (result_file)
+    {
         fclose(result_file);
     }
-    if (dict->elements) {
+    if (dict->elements)
+    {
         free(dict->elements);
     }
 }
@@ -123,7 +142,8 @@ static void master_cleanup(FILE *shadow_file, FILE *result_file, Dictionary *dic
 /*
  * Crack a shadow password entry as master.
  */
-static void master_crack(ExtendedCrackResult *result, Options *options, Dictionary *dict, ShadowEntry *entry) {
+static void master_crack(ExtendedCrackResult *result, Options *options, Dictionary *dict, ShadowEntry *entry)
+{
     // Initialize result
     memset(result, 0, sizeof(ExtendedCrackResult));
     strncpy(result->user, entry->user, MAX_SHADOW_USER_LENGTH);
@@ -131,7 +151,8 @@ static void master_crack(ExtendedCrackResult *result, Options *options, Dictiona
     result->alg = entry->alg;
 
     // Accept only known algs
-    if (entry->alg == ALG_UNKNOWN) {
+    if (entry->alg == ALG_UNKNOWN)
+    {
         result->status = STATUS_SKIP;
         return;
     }
@@ -150,13 +171,15 @@ static void master_crack(ExtendedCrackResult *result, Options *options, Dictiona
     double start_time = 0;
 
     // Try probes until the status changes (when a match is found or the search space is exhausted)
-    while(result->status == STATUS_PENDING) {
+    while (result->status == STATUS_PENDING)
+    {
         // Make jobs with new probes
         // TODO for all ranks
         // TODO use ACTION_WAIT for jobs when running out of probes
         memset(&jobs[0], 0, sizeof(CrackJob));
         bool more_probes = get_next_probe(&config, options, dict);
-        if (!more_probes) {
+        if (!more_probes)
+        {
             break;
         }
         jobs[0].action = ACTION_WORK;
@@ -164,7 +187,8 @@ static void master_crack(ExtendedCrackResult *result, Options *options, Dictiona
         jobs[0].alg = entry->alg;
         jobs[0].salt_end = entry->salt_end;
         strncpy(jobs[0].probe, config.probe, MAX_PASSWORD_LENGTH);
-        if (options->verbose) {
+        if (options->verbose)
+        {
             printf("%s\n", jobs[0].probe);
         }
 
@@ -176,7 +200,8 @@ static void master_crack(ExtendedCrackResult *result, Options *options, Dictiona
         // TODO for all ranks
         result->attempts++;
         // Accept if success (currently the only one it makes sense to stop on)
-        if (results[0].status != STATUS_PENDING) {
+        if (results[0].status != STATUS_PENDING)
+        {
             result->status = results[0].status;
             strncpy(result->password, results[0].password, MAX_PASSWORD_LENGTH);
         }
@@ -196,39 +221,48 @@ static void master_crack(ExtendedCrackResult *result, Options *options, Dictiona
 /*
  * Build the next probe. Returns false with an empty probe when the search space is exhausted.
  */
-static bool get_next_probe(ProbeConfig *config, Options *options, Dictionary *dict) {
+static bool get_next_probe(ProbeConfig *config, Options *options, Dictionary *dict)
+{
     // Check if dict is empty
-    if (dict->length == 0) {
+    if (dict->length == 0)
+    {
         return false;
     }
 
     // Find last symbol which can be replaced with the next one, if any exists
     ssize_t last_replaceable_pos = -1;
-    for (size_t i = 0; i < config->size; i++) {
-        if (config->dict_positions[i] < dict->length - 1) {
+    for (size_t i = 0; i < config->size; i++)
+    {
+        if (config->dict_positions[i] < dict->length - 1)
+        {
             last_replaceable_pos = i;
         }
     }
 
     // A symbol can be replaced, replace last one and reset all behind it
-    if (last_replaceable_pos >= 0) {
+    if (last_replaceable_pos >= 0)
+    {
         size_t new_dict_pos = config->dict_positions[last_replaceable_pos] + 1;
         config->dict_positions[last_replaceable_pos] = new_dict_pos;
         strncpy(config->symbols[last_replaceable_pos], dict->elements[new_dict_pos], MAX_DICT_ELEMENT_LENGTH);
-        for (size_t i = last_replaceable_pos + 1; i < config->size; i++) {
+        for (size_t i = last_replaceable_pos + 1; i < config->size; i++)
+        {
             config->dict_positions[i] = 0;
             strncpy(config->symbols[i], dict->elements[0], MAX_DICT_ELEMENT_LENGTH);
         }
     }
     // No symbols can be replaced and no more symbols are allowed, return error
-    else if (config->size == options->max_length) {
+    else if (config->size == options->max_length)
+    {
         config->probe[0] = 0;
         return false;
     }
     // New symbol can be added, reset all previous positions and add it
-    else {
+    else
+    {
         config->size++;
-        for (size_t i = 0; i < config->size; i++) {
+        for (size_t i = 0; i < config->size; i++)
+        {
             config->dict_positions[i] = 0;
             strncpy(config->symbols[i], dict->elements[0], MAX_DICT_ELEMENT_LENGTH);
         }
@@ -236,8 +270,10 @@ static bool get_next_probe(ProbeConfig *config, Options *options, Dictionary *di
 
     // Build probe
     config->probe[0] = 0;
-    for (size_t i = 0; i < config->size; i++) {
-        if (i > 0) {
+    for (size_t i = 0; i < config->size; i++)
+    {
+        if (i > 0)
+        {
             strncat(config->probe, options->separator, MAX_PASSWORD_LENGTH);
         }
         strncat(config->probe, config->symbols[i], MAX_PASSWORD_LENGTH);
@@ -249,7 +285,8 @@ static bool get_next_probe(ProbeConfig *config, Options *options, Dictionary *di
 /*
  * Handle result from trying to crack a single password.
  */
-static void handle_result(Options *options, ExtendedCrackResult *result, OverviewCrackResult *overview_result, FILE *result_file) {
+static void handle_result(Options *options, ExtendedCrackResult *result, OverviewCrackResult *overview_result, FILE *result_file)
+{
     // Make representations
     char const *alg_str = cryptalg_to_string(result->alg);
     char const *status_str = crack_result_status_to_string(result->status);
@@ -259,11 +296,13 @@ static void handle_result(Options *options, ExtendedCrackResult *result, Overvie
     size_t const static max_output_length = 1023;
     char *output = malloc(max_output_length + 1);
     snprintf(output, max_output_length + 1, "user=\"%s\" alg=\"%s\" status=\"%s\" duration=\"%fs\" attempts=\"%ld\" attempts_per_second=\"%f\" password=\"%s\"",
-            result->user, alg_str, status_str, result->duration, result->attempts, attempts_per_second, result->password);
-    if (!options->quiet) {
+             result->user, alg_str, status_str, result->duration, result->attempts, attempts_per_second, result->password);
+    if (!options->quiet)
+    {
         printf("%s\n", output);
     }
-    if (result_file) {
+    if (result_file)
+    {
         fprintf(result_file, "%s\n", output);
         fflush(result_file);
     }
@@ -278,8 +317,10 @@ static void handle_result(Options *options, ExtendedCrackResult *result, Overvie
 /*
  * Handle result from trying to crack all passwords.
  */
-static void handle_overview_result(Options *options, OverviewCrackResult *result) {
-    if (!options->quiet) {
+static void handle_overview_result(Options *options, OverviewCrackResult *result)
+{
+    if (!options->quiet)
+    {
         printf("\nOverview:\n");
         printf("Total duration: %.3fs\n", result->duration);
         printf("Total attempts: %ld\n", result->attempts);
@@ -293,17 +334,20 @@ static void handle_overview_result(Options *options, OverviewCrackResult *result
 /*
  * Hash probe and compare.
  */
-static void crack_job(CrackResult *result, CrackJob *job) {
+static void crack_job(CrackResult *result, CrackJob *job)
+{
     memset(result, 0, sizeof(CrackResult));
 
     // Only accept known (redundant check)
-    if (job->alg == ALG_UNKNOWN) {
+    if (job->alg == ALG_UNKNOWN)
+    {
         result->status = STATUS_SKIP;
         return;
     }
 
     char const *new_passfield = crypt(job->probe, job->passfield);
-    if (new_passfield != NULL && strncmp(job->passfield, new_passfield, MAX_SHADOW_PASSFIELD_LENGTH) == 0) {
+    if (new_passfield != NULL && strncmp(job->passfield, new_passfield, MAX_SHADOW_PASSFIELD_LENGTH) == 0)
+    {
         // Match found, abort search
         result->status = STATUS_SUCCESS;
         strncpy(result->password, job->probe, MAX_PASSWORD_LENGTH);
