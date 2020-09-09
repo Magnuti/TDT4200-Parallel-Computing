@@ -13,8 +13,8 @@ static bool run_master(int argc, char **argv);
 static bool init_master(Options *options, Dictionary *dict, FILE **shadow_file, FILE **result_file, int argc, char **argv);
 static void master_cleanup(FILE *shadow_file, FILE *result_file, Dictionary *dict);
 static void master_crack(ExtendedCrackResult *result, Options *options, Dictionary *dict, ShadowEntry *entry);
+static void replica_crack(int rank, int number_of_processes);
 static bool get_next_probe(ProbeConfig *config, Options *options, Dictionary *dict);
-static void replica_crack(Options *options);
 static void crack_job(CrackResult *result, CrackJob *job);
 static void handle_result(Options *options, ExtendedCrackResult *result, OverviewCrackResult *overview_result, FILE *result_file);
 static void handle_overview_result(Options *options, OverviewCrackResult *overview_result);
@@ -24,11 +24,11 @@ static void handle_overview_result(Options *options, OverviewCrackResult *overvi
  */
 int main(int argc, char **argv)
 {
-    int mpi_size; // Number of processes
-    int my_rank;  // The rank of this process
+    int number_of_processes; // Number of processes
+    int my_rank;             // The rank of this process
 
     MPI_Init(NULL, NULL);
-    MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
+    MPI_Comm_size(MPI_COMM_WORLD, &number_of_processes);
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
     if (my_rank == 0)
@@ -39,7 +39,7 @@ int main(int argc, char **argv)
     }
     else
     {
-        printf("Greetings from process %d of %d\n", my_rank, mpi_size);
+        replica_crack(my_rank, number_of_processes);
         MPI_Finalize();
         return 0;
     }
@@ -72,6 +72,52 @@ static bool run_master(int argc, char **argv)
             master_crack(&result, &options, &dict, &shadow_entry);
             handle_result(&options, &result, &overview_result, result_file);
         }
+
+        // Send out ACTION_STOP to all replicas when there are no more shadow entires
+        int mpi_size; // Number of processes
+        MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
+
+        CrackJob *empty_crack_job = (CrackJob *)calloc(1, sizeof(CrackJob));
+        CrackResult *emtpy_crack_result = (CrackResult *)calloc(1, sizeof(CrackResult));
+
+        CrackJob stop_crack_job;
+        stop_crack_job.action = ACTION_STOP;
+
+        CrackJob *stop_jobs = (CrackJob *)calloc(mpi_size, sizeof(CrackJob));
+        CrackResult *stop_replica_results = (CrackResult *)calloc(mpi_size, sizeof(CrackResult));
+
+        for (int i = 1; i < mpi_size; i++)
+        {
+            stop_jobs[i] = stop_crack_job;
+        }
+
+        // Master receives the empty crack job, while replicas receive a CrackJob with ACTION_STOP
+
+        MPI_Scatter(
+            stop_jobs,        // The data we want to scatter
+            sizeof(CrackJob), // How many MPI_BYTES to send --> one CrackJob
+            MPI_BYTE,         // Send data type
+            empty_crack_job,  // Buffer for receiving the emtpy CrackJob, i.e. only 0s
+            sizeof(CrackJob), // How many MPI_BYTES to receive
+            MPI_BYTE,         // Receive data type
+            0,                // Root process
+            MPI_COMM_WORLD    // Communicator
+        );
+
+        MPI_Gather(
+            emtpy_crack_result,   // Data to send
+            sizeof(CrackResult),  // How many MPI_BYTES to send
+            MPI_BYTE,             // Send data type
+            stop_replica_results, // Data array to gather
+            sizeof(CrackResult),  // How many MPI_BYTES to receive per process
+            MPI_BYTE,             // Receive data type
+            0,                    // Root process
+            MPI_COMM_WORLD        // Communicator
+        );
+
+        free(empty_crack_job);
+        free(stop_jobs);
+        free(stop_replica_results);
     }
 
     // Handle overall result
@@ -165,6 +211,10 @@ static void master_cleanup(FILE *shadow_file, FILE *result_file, Dictionary *dic
  */
 static void master_crack(ExtendedCrackResult *result, Options *options, Dictionary *dict, ShadowEntry *entry)
 {
+
+    int mpi_size; // Numer of processes
+    MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
+
     // Initialize result
     memset(result, 0, sizeof(ExtendedCrackResult));
     strncpy(result->user, entry->user, MAX_SHADOW_USER_LENGTH);
@@ -182,10 +232,18 @@ static void master_crack(ExtendedCrackResult *result, Options *options, Dictiona
     ProbeConfig config = {};
     config.dict_positions = calloc(options->max_length, sizeof(size_t));
     config.symbols = calloc(options->max_length, MAX_DICT_ELEMENT_LENGTH + 1);
-    // TODO allocate and initialize for multiple ranks
-    CrackJob *jobs = calloc(1, sizeof(CrackJob));
-    strncpy(jobs[0].passfield, entry->passfield, MAX_SHADOW_PASSFIELD_LENGTH);
-    CrackResult *results = calloc(1, sizeof(CrackResult));
+
+    CrackJob *jobs = (CrackJob *)calloc(mpi_size, sizeof(CrackJob));                     // A memory block for all the jobs
+    CrackResult *replica_results = (CrackResult *)calloc(mpi_size, sizeof(CrackResult)); // A memory block for all the results
+
+    CrackJob *empty_crack_job = (CrackJob *)calloc(1, sizeof(CrackJob));             // Memory block for master's empty crack job
+    CrackResult *empty_crack_result = (CrackResult *)calloc(1, sizeof(CrackResult)); // Memory block for master's empty crack result
+
+    // Places the passfield into each job's passfield
+    for (int i = 1; i < mpi_size; i++)
+    {
+        strncpy(jobs[i].passfield, entry->passfield, MAX_SHADOW_PASSFIELD_LENGTH);
+    }
 
     // Start time measurement
     double start_time = MPI_Wtime();
@@ -193,37 +251,72 @@ static void master_crack(ExtendedCrackResult *result, Options *options, Dictiona
     // Try probes until the status changes (when a match is found or the search space is exhausted)
     while (result->status == STATUS_PENDING)
     {
-        // Make jobs with new probes
-        // TODO for all ranks
-        // TODO use ACTION_WAIT for jobs when running out of probes
-        memset(&jobs[0], 0, sizeof(CrackJob));
-        bool more_probes = get_next_probe(&config, options, dict);
-        if (!more_probes)
+        // printf("Cracking shadow entry %s\n", entry->user);
+        bool out_of_probes = false;
+        // Make a job for each replica with new probes
+        for (int i = 1; i < mpi_size; i++)
         {
-            break;
-        }
-        jobs[0].action = ACTION_WORK;
-        strncpy(jobs[0].passfield, entry->passfield, MAX_PASSWORD_LENGTH);
-        jobs[0].alg = entry->alg;
-        jobs[0].salt_end = entry->salt_end;
-        strncpy(jobs[0].probe, config.probe, MAX_PASSWORD_LENGTH);
-        if (options->verbose)
-        {
-            printf("%s\n", jobs[0].probe);
+            // memset(&jobs[i], 0, sizeof(CrackJob));
+            bool more_probes = get_next_probe(&config, options, dict);
+            if (!more_probes)
+            {
+                // * May break. Maybe set ACTION_WAIT for every remaining processs instead of continue loop
+                jobs[i].action = ACTION_WAIT;
+                out_of_probes = true;
+                continue;
+            }
+            jobs[i].action = ACTION_WORK;
+            strncpy(jobs[i].passfield, entry->passfield, MAX_PASSWORD_LENGTH);
+            jobs[i].alg = entry->alg;
+            jobs[i].salt_end = entry->salt_end;
+            strncpy(jobs[i].probe, config.probe, MAX_PASSWORD_LENGTH);
+            if (options->verbose)
+            {
+                printf("%s\n", jobs[i].probe);
+            }
         }
 
-        // Process job
-        // TODO parallelize
-        crack_job(&results[0], &jobs[0]);
+        MPI_Scatter(
+            jobs,             // The data we want to scatter
+            sizeof(CrackJob), // How many MPI_BYTES to send per process -> one CrackJob
+            MPI_BYTE,         // Send data type
+            empty_crack_job,  // Buffer for receiving the emtpy CrackJob, i.e. only 0s
+            sizeof(CrackJob), // How many MPI_BYTES to receive
+            MPI_BYTE,         // Receive data type
+            0,                // Root process
+            MPI_COMM_WORLD    // Communicator
+        );
 
-        // Handle results
-        // TODO for all ranks
-        result->attempts++;
-        // Accept if success (currently the only one it makes sense to stop on)
-        if (results[0].status != STATUS_PENDING)
+        MPI_Gather(
+            empty_crack_result,  // Data to send
+            sizeof(CrackResult), // How many MPI_BYTES to send
+            MPI_BYTE,            // Send data type
+            replica_results,     // Data array to gather
+            sizeof(CrackResult), // How many MPI_BYTES to receive per process
+            MPI_BYTE,            // Receive data type
+            0,                   // Root process
+            MPI_COMM_WORLD       // Communicator
+        );
+
+        for (int i = 1; i < mpi_size; i++)
         {
-            result->status = results[0].status;
-            strncpy(result->password, results[0].password, MAX_PASSWORD_LENGTH);
+            CrackResult *this_result = &replica_results[i];
+            if (this_result->status == STATUS_SKIP)
+            {
+                continue;
+            }
+            result->attempts++;
+            if (this_result->status == STATUS_SUCCESS)
+            {
+                result->status = STATUS_SUCCESS;
+                strncpy(this_result->password, result->password, MAX_PASSWORD_LENGTH);
+                break;
+            }
+        }
+
+        if (out_of_probes && result->status != STATUS_SUCCESS)
+        {
+            result->status = STATUS_FAIL;
         }
     }
 
@@ -234,7 +327,57 @@ static void master_crack(ExtendedCrackResult *result, Options *options, Dictiona
     free(config.dict_positions);
     free(config.symbols);
     free(jobs);
-    free(results);
+    free(replica_results);
+
+    free(empty_crack_job);
+}
+
+static void replica_crack(int rank, int number_of_processes)
+{
+    // Infinite loop: wait for a new job or ACTION_STOP
+    while (true)
+    {
+        CrackJob *my_job = (CrackJob *)calloc(1, sizeof(CrackJob));
+        CrackResult *my_result = (CrackResult *)calloc(1, sizeof(CrackResult));
+
+        MPI_Scatter(
+            NULL,             // Send buffer -> the receiver dont send anything
+            0,                // Send count -> the receiver dont send anything
+            MPI_BYTE,         // Send data type
+            my_job,           // Receive buffer for the received CrackJob
+            sizeof(CrackJob), // How many MPI_BYTES to receive -> one CrackJob
+            MPI_BYTE,         // Receive data type
+            0,                // Root process
+            MPI_COMM_WORLD    // Communicator
+        );
+
+        if (my_job->action == ACTION_WAIT || my_job->action == ACTION_STOP)
+        {
+            my_result->status == STATUS_SKIP;
+        }
+        else
+        {
+            crack_job(&my_result[0], &my_job[0]);
+        }
+
+        MPI_Gather(
+            my_result,           // Data to send
+            sizeof(CrackResult), // How many bytes to send --> one CrackResult
+            MPI_BYTE,            // Send data type
+            NULL,                // Receive buffer -> nothing to receive
+            0,                   // Receive count -> nothing to receive
+            MPI_BYTE,            // Receive type
+            0,                   // Master rank
+            MPI_COMM_WORLD       // Communicator
+        );
+
+        // Stops the process
+        if (my_job->action == ACTION_STOP)
+        {
+            break;
+        }
+    }
+    // printf("Prrocess %d of %d finished!\n", rank, number_of_processes);
 }
 
 /*
