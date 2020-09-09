@@ -96,6 +96,29 @@ As we can see, the result is pretty much the same when we run one process vs. 12
 * 1 process: 9.652s
 * 12 processes: 10.049s
 
-
-
 ## Task 3
+
+With two processors:
+`$ mpirun -n 2 --oversubscribe ./crack -i data/shadow/sha512-2alnum -d data/dict/alnum.txt -l 2`
+Workers: 2  
+
+Overview:  
+Total duration: 9.592s  
+Total attempts: 6396  
+Total attempts per second: 666.800  
+Skipped: 18  
+Successful: 4  
+Failed: 0  
+
+With 20 processors:
+`$ mpirun -n 20 --oversubscribe ./crack -i data/shadow/sha512-2alnum -d data/dict/alnum.txt -l 2`
+
+Overview:  
+Total duration: 0.979s  
+Total attempts: 6396  
+Total attempts per second: 6533.046  
+Skipped: 18  
+Successful: 4  
+Failed: 0
+
+What a speedup! 10x faster!
