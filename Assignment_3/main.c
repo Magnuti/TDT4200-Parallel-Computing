@@ -128,7 +128,7 @@ void help(char const *exec, char const opt, char const *optarg)
   fprintf(out, "Example: %s before.bmp after.bmp -i 10000\n", exec);
 }
 
-void run_replica(int my_rank)
+void run_replica(int my_rank, int world_size)
 {
 
   //* Each rank gets a number of rows, not just one! (most likely)
@@ -150,19 +150,50 @@ void run_replica(int my_rank)
       MPI_COMM_WORLD);            // Communicator
 
   printf("Greetings from process %d! The image is %dx%d!\n", my_rank, image_dimensions->image_width, image_dimensions->image_height);
+
+  {
+    int row_size = image_dimensions->image_width * sizeof(pixel);
+    int send_counts[world_size]; // How many (rows * row_size) to send
+    int min_rows_per_process = image_dimensions->image_height / world_size;
+    int remainder_rows = image_dimensions->image_height % world_size;
+
+    // Divide the rows as evenly as possible among processes, the first ones may get one extra row. E.g. [2, 2, 1]
+    for (int i = 0; i < world_size; i++)
+    {
+      int rows = i < remainder_rows ? min_rows_per_process + 1 : min_rows_per_process;
+      send_counts[i] = rows * row_size;
+    }
+
+    pixel *recv_buffer = calloc(send_counts[my_rank], sizeof(pixel));
+
+    // MPI_Scatterv(send_buffer, send_counts, displacements, send_type, recv_buffer, recv_count, recv_type, 0, communicator);
+    MPI_Scatterv(
+        NULL,                 // Send buffer
+        0,                    // Array of length world_size -> how many rows to send to each process e.g. [2, 2, 1] * row_size
+        NULL,                 // Unimportant for receiver -> the offset of the send_buffer of where to start sending data to a process
+        MPI_UNSIGNED_CHAR,    // Send type
+        recv_buffer,          // Receive buffer
+        send_counts[my_rank], // Receive count
+        MPI_UNSIGNED_CHAR,    // Receive type
+        0,
+        MPI_COMM_WORLD);
+
+    printf("Process %d received %d rows\n", my_rank, send_counts[my_rank] / row_size);
+  }
 }
 
 int main(int argc, char **argv)
 {
   MPI_Init(NULL, NULL);
 
-  int my_rank;
+  int my_rank, world_size;
 
+  MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
   if (my_rank != 0)
   {
-    run_replica(my_rank);
+    run_replica(my_rank, world_size);
 
     MPI_Finalize();
     return 0;
@@ -258,7 +289,7 @@ int main(int argc, char **argv)
       goto error_exit;
     }
 
-    printf("Apply kernel '%s' on image with %u x %u pixels for %u iterations\n", kernelNames[kernelIndex], image->width, image->height, iterations);
+    printf("Apply kernel '%s' on image with %u x %u pixels (width*height) for %u iterations\n", kernelNames[kernelIndex], image->width, image->height, iterations);
 
     // TODO Send image dimensions with MPI_Bcast
 
@@ -275,9 +306,49 @@ int main(int argc, char **argv)
         0,                          // Master rank
         MPI_COMM_WORLD);            // Communicator
 
-    // TODO: Use Scatterv to dispatch the rows to the processes
-    // Does master get rows as well? If it does, maybe only have main function
+    // We use scope here because we cannot jump into a variable size array with goto
+    // so, the arrays are restricted to this scope only (C99 standards).
+    {
+      int row_size = image->width * sizeof(pixel);
+      int send_counts[world_size];   // How many (rows * row_size) to send
+      int displacements[world_size]; // Offset for where the data is located for each process on the array
+      int min_rows_per_process = image->height / world_size;
+      printf("row size: %d\n", row_size);
+      printf("min_rows_per_process: %d\n", min_rows_per_process);
 
+      int remainder_rows = image->height % world_size;
+
+      // Divide the rows as evenly as possible among processes, the first ones may get one extra row. E.g. [2, 2, 1]
+      for (int i = 0; i < world_size; i++)
+      {
+        int rows = i < remainder_rows ? min_rows_per_process + 1 : min_rows_per_process;
+        send_counts[i] = rows * row_size;
+        printf("Send counts process %d is: %d --> %d rows\n", i, send_counts[i], send_counts[i] / row_size);
+      }
+
+      displacements[0] = 0;
+      for (int i = 1; i < world_size; i++)
+      {
+        displacements[i] = displacements[i - 1] + send_counts[i - 1];
+        printf("Displacements %d: %d:\n", i, displacements[i]);
+      }
+
+      pixel *recv_buffer = calloc(send_counts[my_rank], sizeof(pixel));
+
+      // MPI_Scatterv(send_buffer, send_counts, displacements, send_type, recv_buffer, recv_count, recv_type, 0, communicator);
+      MPI_Scatterv(
+          image->rawdata,       // Send buffer
+          send_counts,          // Array of length world_size -> how many rows to send to each process e.g. [2, 2, 1] * row_size
+          displacements,        // Array of length world_size -> the offset of the send_buffer of where to start sending data to a process
+          MPI_UNSIGNED_CHAR,    // Send type
+          recv_buffer,          // Receive buffer
+          send_counts[my_rank], // Receive count
+          MPI_UNSIGNED_CHAR,    // Receive type
+          0,
+          MPI_COMM_WORLD);
+
+      printf("Process %d received %d rows\n", my_rank, send_counts[my_rank] / row_size);
+    }
     // Time measurement start
     double start_time = MPI_Wtime();
 
