@@ -10,7 +10,7 @@
 
 typedef struct
 {
-  int image_width, image_height;
+  unsigned int image_width, image_height, kernel_index;
 } image_dimensions_t;
 
 // Convolutional Kernel Examples, each with dimension 3,
@@ -130,15 +130,6 @@ void help(char const *exec, char const opt, char const *optarg)
 
 void run_replica(int my_rank, int world_size)
 {
-
-  //* Each rank gets a number of rows, not just one! (most likely)
-
-  // TODO: Exhange borders based on my_rank % 2 == 0
-  // This is so that each border pair swaps the upper/lower border,
-  // which prevents deadlock, where everyone waits for e.g. the lower.
-
-  // TODO get image dimensions from MPI_Bcast
-
   image_dimensions_t *image_dimensions = calloc(1, sizeof(image_dimensions_t));
 
   // MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm)
@@ -164,7 +155,7 @@ void run_replica(int my_rank, int world_size)
       send_counts[i] = rows * row_size;
     }
 
-    pixel *recv_buffer = calloc(send_counts[my_rank], sizeof(pixel));
+    pixel *my_rows = calloc(send_counts[my_rank], sizeof(pixel));
 
     // MPI_Scatterv(send_buffer, send_counts, displacements, send_type, recv_buffer, recv_count, recv_type, 0, communicator);
     MPI_Scatterv(
@@ -172,13 +163,100 @@ void run_replica(int my_rank, int world_size)
         0,                    // Array of length world_size -> how many rows to send to each process e.g. [2, 2, 1] * row_size
         NULL,                 // Unimportant for receiver -> the offset of the send_buffer of where to start sending data to a process
         MPI_UNSIGNED_CHAR,    // Send type
-        recv_buffer,          // Receive buffer
+        my_rows,              // Receive buffer
         send_counts[my_rank], // Receive count
         MPI_UNSIGNED_CHAR,    // Receive type
         0,
         MPI_COMM_WORLD);
 
     printf("Process %d received %d rows\n", my_rank, send_counts[my_rank] / row_size);
+
+    int number_of_rows_to_swap = kernelDims[image_dimensions->kernel_index] / 2;
+    int pixels_to_swap = image_dimensions->image_width * number_of_rows_to_swap;
+
+    pixel *upper_border_rows = calloc(pixels_to_swap, sizeof(pixel));
+    pixel *lower_border_rows;
+
+    // Don't ask for lower_border if it is the process with the lowest rows
+    if (my_rank < world_size - 1)
+    {
+      lower_border_rows = calloc(pixels_to_swap, sizeof(pixel));
+    }
+
+    int bytes_to_swap = pixels_to_swap * sizeof(pixel);
+
+    // Even ranks swap right first, then left
+    if (my_rank % 2 == 0)
+    {
+      if (my_rank < world_size - 1)
+      {
+        MPI_Sendrecv(
+            my_rows + send_counts[my_rank] - pixels_to_swap, // Send the last rows in my_rows
+            bytes_to_swap,                                   // How many MPI_BYTES to send
+            MPI_BYTE,                                        // Send type
+            my_rank + 1,                                     // Receiver rank
+            0,                                               // Tag
+            lower_border_rows,                               // Receive buffer
+            bytes_to_swap,                                   // Receive count in MPI_BYTES
+            MPI_BYTE,                                        // Receive data type
+            my_rank + 1,                                     // Source rank
+            0,                                               // Tag
+            MPI_COMM_WORLD,                                  // Communicator
+            MPI_STATUS_IGNORE                                // Status
+        );
+      }
+      MPI_Sendrecv(
+          my_rows,           // Send buffer
+          bytes_to_swap,     // How many MPI_BYTES to send
+          MPI_BYTE,          // Send type
+          my_rank - 1,       // Receiver rank
+          0,                 // Tag
+          upper_border_rows, // Receive buffer
+          bytes_to_swap,     // Receive count in MPI_BYTES
+          MPI_BYTE,          // Receive data type
+          my_rank - 1,       // Source rank
+          0,                 // Tag
+          MPI_COMM_WORLD,    // Communicator
+          MPI_STATUS_IGNORE  // Status
+      );
+    }
+    // Odd ranks swap left first, then right
+    else
+    {
+      MPI_Sendrecv(
+          my_rows,           // Send buffer
+          bytes_to_swap,     // How many MPI_BYTES to send
+          MPI_BYTE,          // Send type
+          my_rank - 1,       // Receiver rank
+          0,                 // Tag
+          upper_border_rows, // Receive buffer
+          bytes_to_swap,     // Receive count in MPI_BYTES
+          MPI_BYTE,          // Receive data type
+          my_rank - 1,       // Source rank
+          0,                 // Tag
+          MPI_COMM_WORLD,    // Communicator
+          MPI_STATUS_IGNORE  // Status
+      );
+      if (my_rank < world_size - 1)
+      {
+        MPI_Sendrecv(
+            my_rows + send_counts[my_rank] - pixels_to_swap, // Send the last rows in my_rows
+            bytes_to_swap,                                   // How many MPI_BYTES to send
+            MPI_BYTE,                                        // Send type
+            my_rank + 1,                                     // Receiver rank
+            0,                                               // Tag
+            lower_border_rows,                               // Receive buffer
+            bytes_to_swap,                                   // Receive count in MPI_BYTES
+            MPI_BYTE,                                        // Receive data type
+            my_rank + 1,                                     // Source rank
+            0,                                               // Tag
+            MPI_COMM_WORLD,                                  // Communicator
+            MPI_STATUS_IGNORE                                // Status
+        );
+      }
+    }
+
+    printf("Receive complete from rank %d!\n", my_rank);
   }
 }
 
@@ -293,10 +371,11 @@ int main(int argc, char **argv)
 
     // TODO Send image dimensions with MPI_Bcast
 
-    image_dimensions_t *image_dimensions = calloc(1, sizeof(image_dimensions));
+    image_dimensions_t *image_dimensions = calloc(1, sizeof(image_dimensions_t));
 
     image_dimensions->image_width = image->width;
     image_dimensions->image_height = image->height;
+    image_dimensions->kernel_index = kernelIndex;
 
     // MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm)
     MPI_Bcast(
@@ -333,7 +412,7 @@ int main(int argc, char **argv)
         printf("Displacements %d: %d:\n", i, displacements[i]);
       }
 
-      pixel *recv_buffer = calloc(send_counts[my_rank], sizeof(pixel));
+      pixel *my_rows = calloc(send_counts[my_rank], sizeof(pixel));
 
       // MPI_Scatterv(send_buffer, send_counts, displacements, send_type, recv_buffer, recv_count, recv_type, 0, communicator);
       MPI_Scatterv(
@@ -341,14 +420,39 @@ int main(int argc, char **argv)
           send_counts,          // Array of length world_size -> how many rows to send to each process e.g. [2, 2, 1] * row_size
           displacements,        // Array of length world_size -> the offset of the send_buffer of where to start sending data to a process
           MPI_UNSIGNED_CHAR,    // Send type
-          recv_buffer,          // Receive buffer
+          my_rows,              // Receive buffer
           send_counts[my_rank], // Receive count
           MPI_UNSIGNED_CHAR,    // Receive type
           0,
           MPI_COMM_WORLD);
 
       printf("Process %d received %d rows\n", my_rank, send_counts[my_rank] / row_size);
+
+      int number_of_rows_to_swap = kernelDims[kernelIndex] / 2;
+      int pixels_to_swap = image_dimensions->image_width * number_of_rows_to_swap;
+
+      pixel *lower_border_rows = calloc(pixels_to_swap, sizeof(pixel));
+
+      int bytes_to_swap = pixels_to_swap * sizeof(pixel);
+
+      MPI_Sendrecv(
+          my_rows + send_counts[my_rank] - pixels_to_swap, // Send the last rows in my_rows
+          bytes_to_swap,                                   // How many MPI_BYTES to send
+          MPI_BYTE,                                        // Send type
+          my_rank + 1,                                     // Receiver rank
+          0,                                               // Tag
+          lower_border_rows,                               // Receive buffer
+          bytes_to_swap,                                   // Receive count in MPI_BYTES
+          MPI_BYTE,                                        // Receive data type
+          my_rank + 1,                                     // Source rank
+          0,                                               // Tag
+          MPI_COMM_WORLD,                                  // Communicator
+          MPI_STATUS_IGNORE                                // Status
+      );
+
+      printf("Receive complete from rank %d!\n", my_rank);
     }
+
     // Time measurement start
     double start_time = MPI_Wtime();
 
