@@ -286,7 +286,7 @@ int main(int argc, char **argv)
       displacements[i] = displacements[i - 1] + send_counts[i - 1];
       if (my_rank == 0)
       {
-        printf("Displacements %d: %d:\n", i, displacements[i]);
+        // printf("Displacements %d: %d:\n", i, displacements[i]);
         // Maybe entire displacements should go into master
       }
     }
@@ -307,7 +307,7 @@ int main(int argc, char **argv)
 
     int number_of_my_rows = send_counts[my_rank] / rowSize;
 
-    printf("Process %d received %d rows\n", my_rank, number_of_my_rows);
+    // printf("Process %d received %d rows\n", my_rank, number_of_my_rows);
 
     /* End scatter */
 
@@ -331,37 +331,59 @@ int main(int argc, char **argv)
 
     int bytesToSwap = imageDimensions->width * number_of_rows_to_swap * sizeof(pixel);
 
-    // TODO Put all this into a iteration loop
-    // Ignore border exhange if we only have one process
-    if (world_size > 1)
+    for (unsigned int i = 0; i < iterations; i++)
     {
-      // TODO Swap row multiple times for matrix > 3x3 -> OR, find a way to send it all at once.
-      // Even ranks swap right first, then left
-      if (my_rank % 2 == 0)
+
+      // Ignore border exhange if we only have one process
+      if (world_size > 1)
       {
-        // * Maybe make these into functions instead of repeating them
-        if (my_rank < world_size - 1)
+        // TODO Swap row multiple times for matrix > 3x3 -> OR, find a way to send it all at once.
+        // Even ranks swap right first, then left
+        if (my_rank % 2 == 0)
         {
-          // printf("Rank %d tries to send/receive %d bytes with rank %d The offset is %ld.\n", my_rank, bytesToSwap, my_rank + 1, send_counts[my_rank] / sizeof(pixel) - pixels_to_swap);
-          MPI_Sendrecv(
-              // &my_rows[(send_counts[my_rank] / sizeof(pixel)) - pixels_to_swap], // Send the last rows in my_rows
-              my_image_rows_and_borders->data[my_image_rows_and_borders->height - 2], // Send buffer lower rows // ! Fix -1
-              bytesToSwap,                                                            // How many MPI_BYTES to send
-              MPI_BYTE,                                                               // Send type
-              my_rank + 1,                                                            // Receiver rank
-              0,                                                                      // Tag
-              my_image_rows_and_borders->data[my_image_rows_and_borders->height - 1], // Receive buffer lower rows
-              bytesToSwap,                                                            // Receive count in MPI_BYTES
-              MPI_BYTE,                                                               // Receive data type
-              my_rank + 1,                                                            // Source rank
-              0,                                                                      // Tag
-              MPI_COMM_WORLD,                                                         // Communicator
-              MPI_STATUS_IGNORE                                                       // Status
-          );
+          // * Maybe make these into functions instead of repeating them
+          if (my_rank < world_size - 1)
+          {
+            // printf("Rank %d tries to send/receive %d bytes with rank %d The offset is %ld.\n", my_rank, bytesToSwap, my_rank + 1, send_counts[my_rank] / sizeof(pixel) - pixels_to_swap);
+            MPI_Sendrecv(
+                // &my_rows[(send_counts[my_rank] / sizeof(pixel)) - pixels_to_swap], // Send the last rows in my_rows
+                my_image_rows_and_borders->data[my_image_rows_and_borders->height - 2], // Send buffer lower rows // ! Fix -1
+                bytesToSwap,                                                            // How many MPI_BYTES to send
+                MPI_BYTE,                                                               // Send type
+                my_rank + 1,                                                            // Receiver rank
+                0,                                                                      // Tag
+                my_image_rows_and_borders->data[my_image_rows_and_borders->height - 1], // Receive buffer lower rows
+                bytesToSwap,                                                            // Receive count in MPI_BYTES
+                MPI_BYTE,                                                               // Receive data type
+                my_rank + 1,                                                            // Source rank
+                0,                                                                      // Tag
+                MPI_COMM_WORLD,                                                         // Communicator
+                MPI_STATUS_IGNORE                                                       // Status
+            );
+          }
+          if (my_rank > 0)
+          {
+            // printf("Rank %d tries to send/receive %d bytes with rank %d.\n", my_rank, bytesToSwap, my_rank - 1);
+            MPI_Sendrecv(
+                my_image_rows_and_borders->data[1], // Send buffer upper rows // ! Fix +1
+                bytesToSwap,                        // How many MPI_BYTES to send
+                MPI_BYTE,                           // Send type
+                my_rank - 1,                        // Receiver rank
+                0,                                  // Tag
+                my_image_rows_and_borders->data[0], // Receive buffer upper rows
+                bytesToSwap,                        // Receive count in MPI_BYTES
+                MPI_BYTE,                           // Receive data type
+                my_rank - 1,                        // Source rank
+                0,                                  // Tag
+                MPI_COMM_WORLD,                     // Communicator
+                MPI_STATUS_IGNORE                   // Status
+            );
+          }
         }
-        if (my_rank > 0)
+        // Odd ranks swap left first, then right
+        else
         {
-          // printf("Rank %d tries to send/receive %d bytes with rank %d.\n", my_rank, bytesToSwap, my_rank - 1);
+          // printf("Rank %d tries to send/receive %d bytes with rank %d The offset is %ld.\n", my_rank, bytesToSwap, my_rank - 1, send_counts[my_rank] / sizeof(pixel) - pixels_to_swap);
           MPI_Sendrecv(
               my_image_rows_and_borders->data[1], // Send buffer upper rows // ! Fix +1
               bytesToSwap,                        // How many MPI_BYTES to send
@@ -376,53 +398,33 @@ int main(int argc, char **argv)
               MPI_COMM_WORLD,                     // Communicator
               MPI_STATUS_IGNORE                   // Status
           );
+          // printf("Rank %d tries to send/receive %d bytes with rank %d.\n", my_rank, bytesToSwap, my_rank + 1);
+          if (my_rank < world_size - 1)
+          {
+            MPI_Sendrecv(
+                // &my_rows[(send_counts[my_rank] / sizeof(pixel)) - pixels_to_swap], // Send the last rows in my_rows
+                my_image_rows_and_borders->data[my_image_rows_and_borders->height - 2], // Send buffer lower rows // ! Fix
+                bytesToSwap,                                                            // How many MPI_BYTES to send
+                MPI_BYTE,                                                               // Send type
+                my_rank + 1,                                                            // Receiver rank
+                0,                                                                      // Tag
+                my_image_rows_and_borders->data[my_image_rows_and_borders->height - 1], // Receive buffer lower rows
+                bytesToSwap,                                                            // Receive count in MPI_BYTES
+                MPI_BYTE,                                                               // Receive data type
+                my_rank + 1,                                                            // Source rank
+                0,                                                                      // Tag
+                MPI_COMM_WORLD,                                                         // Communicator
+                MPI_STATUS_IGNORE                                                       // Status
+            );
+          }
         }
       }
-      // Odd ranks swap left first, then right
-      else
-      {
-        // printf("Rank %d tries to send/receive %d bytes with rank %d The offset is %ld.\n", my_rank, bytesToSwap, my_rank - 1, send_counts[my_rank] / sizeof(pixel) - pixels_to_swap);
-        MPI_Sendrecv(
-            my_image_rows_and_borders->data[1], // Send buffer upper rows // ! Fix +1
-            bytesToSwap,                        // How many MPI_BYTES to send
-            MPI_BYTE,                           // Send type
-            my_rank - 1,                        // Receiver rank
-            0,                                  // Tag
-            my_image_rows_and_borders->data[0], // Receive buffer upper rows
-            bytesToSwap,                        // Receive count in MPI_BYTES
-            MPI_BYTE,                           // Receive data type
-            my_rank - 1,                        // Source rank
-            0,                                  // Tag
-            MPI_COMM_WORLD,                     // Communicator
-            MPI_STATUS_IGNORE                   // Status
-        );
-        // printf("Rank %d tries to send/receive %d bytes with rank %d.\n", my_rank, bytesToSwap, my_rank + 1);
-        if (my_rank < world_size - 1)
-        {
-          MPI_Sendrecv(
-              // &my_rows[(send_counts[my_rank] / sizeof(pixel)) - pixels_to_swap], // Send the last rows in my_rows
-              my_image_rows_and_borders->data[my_image_rows_and_borders->height - 2], // Send buffer lower rows // ! Fix
-              bytesToSwap,                                                            // How many MPI_BYTES to send
-              MPI_BYTE,                                                               // Send type
-              my_rank + 1,                                                            // Receiver rank
-              0,                                                                      // Tag
-              my_image_rows_and_borders->data[my_image_rows_and_borders->height - 1], // Receive buffer lower rows
-              bytesToSwap,                                                            // Receive count in MPI_BYTES
-              MPI_BYTE,                                                               // Receive data type
-              my_rank + 1,                                                            // Source rank
-              0,                                                                      // Tag
-              MPI_COMM_WORLD,                                                         // Communicator
-              MPI_STATUS_IGNORE                                                       // Status
-          );
-        }
-      }
-    }
 
-    printf("Rank %d completed border exhange for iteration %d\n", my_rank, 1);
+      printf("Rank %d completed border exhange for iteration %d\n", my_rank, 1);
 
-    bmpImage *processImage = newBmpImage(my_image_rows_and_borders->width, my_image_rows_and_borders->height);
-    for (unsigned int i = 0; i < iterations; i++)
-    {
+      // Now we have the borders, so we can start the convolution with our kernel
+
+      bmpImage *processImage = newBmpImage(my_image_rows_and_borders->width, my_image_rows_and_borders->height);
       applyKernel(processImage->data,
                   my_image_rows_and_borders->data,
                   my_image_rows_and_borders->width,
@@ -431,8 +433,8 @@ int main(int argc, char **argv)
                   kernelDims[kernelIndex],
                   kernelFactors[kernelIndex]);
       swapImage(&processImage, &my_image_rows_and_borders);
+      freeBmpImage(processImage);
     }
-    freeBmpImage(processImage);
 
     /* End border swapping and image processing  */
 
