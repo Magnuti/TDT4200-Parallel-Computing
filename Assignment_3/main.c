@@ -213,6 +213,8 @@ int main(int argc, char **argv)
   pixel *sendBuffer;
   pixel *receiveBuffer;
 
+  double startTime, endTime;
+
   /*
     Create the BMP image and load it from disk.
    */
@@ -248,6 +250,9 @@ int main(int argc, char **argv)
     receiveBuffer = (pixel *)calloc(image->width * image->height, sizeof(pixel));
 
     freeBmpImage(image);
+
+    // Start time measurement before any MPI communication takes place
+    startTime = MPI_Wtime();
   }
 
   // MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm)
@@ -286,7 +291,7 @@ int main(int argc, char **argv)
       }
     }
 
-    pixel *my_rows = calloc(send_counts[my_rank], sizeof(pixel));
+    pixel *my_rows = calloc(1, send_counts[my_rank]);
 
     // MPI_Scatterv(send_buffer, send_counts, displacements, send_type, recv_buffer, recv_count, recv_type, 0, communicator);
     MPI_Scatterv(
@@ -304,6 +309,133 @@ int main(int argc, char **argv)
 
     printf("Process %d received %d rows\n", my_rank, number_of_my_rows);
 
+    /* End scatter */
+
+    /* Start border swapping and image processing  */
+
+    int number_of_rows_to_swap = kernelDims[kernelIndex] / 2;
+
+    bmpImage *my_image_rows_and_borders = newBmpImage(imageDimensions->width, number_of_my_rows + number_of_rows_to_swap * 2);
+
+    // Puts my_rows inside my_image_rows_and_borders
+    //* Inefficient code..
+    for (int y = 0; y < number_of_my_rows; y++)
+    {
+      for (int x = 0; x < imageDimensions->width; x++)
+      {
+        my_image_rows_and_borders->data[number_of_rows_to_swap + y][x] = my_rows[y * imageDimensions->width + x];
+      }
+    }
+
+    free(my_rows);
+
+    int bytesToSwap = imageDimensions->width * number_of_rows_to_swap * sizeof(pixel);
+
+    // TODO Put all this into a iteration loop
+    // Ignore border exhange if we only have one process
+    if (world_size > 1)
+    {
+      // TODO Swap row multiple times for matrix > 3x3 -> OR, find a way to send it all at once.
+      // Even ranks swap right first, then left
+      if (my_rank % 2 == 0)
+      {
+        // * Maybe make these into functions instead of repeating them
+        if (my_rank < world_size - 1)
+        {
+          // printf("Rank %d tries to send/receive %d bytes with rank %d The offset is %ld.\n", my_rank, bytesToSwap, my_rank + 1, send_counts[my_rank] / sizeof(pixel) - pixels_to_swap);
+          MPI_Sendrecv(
+              // &my_rows[(send_counts[my_rank] / sizeof(pixel)) - pixels_to_swap], // Send the last rows in my_rows
+              my_image_rows_and_borders->data[my_image_rows_and_borders->height - 2], // Send buffer lower rows // ! Fix -1
+              bytesToSwap,                                                            // How many MPI_BYTES to send
+              MPI_BYTE,                                                               // Send type
+              my_rank + 1,                                                            // Receiver rank
+              0,                                                                      // Tag
+              my_image_rows_and_borders->data[my_image_rows_and_borders->height - 1], // Receive buffer lower rows
+              bytesToSwap,                                                            // Receive count in MPI_BYTES
+              MPI_BYTE,                                                               // Receive data type
+              my_rank + 1,                                                            // Source rank
+              0,                                                                      // Tag
+              MPI_COMM_WORLD,                                                         // Communicator
+              MPI_STATUS_IGNORE                                                       // Status
+          );
+        }
+        if (my_rank > 0)
+        {
+          // printf("Rank %d tries to send/receive %d bytes with rank %d.\n", my_rank, bytesToSwap, my_rank - 1);
+          MPI_Sendrecv(
+              my_image_rows_and_borders->data[1], // Send buffer upper rows // ! Fix +1
+              bytesToSwap,                        // How many MPI_BYTES to send
+              MPI_BYTE,                           // Send type
+              my_rank - 1,                        // Receiver rank
+              0,                                  // Tag
+              my_image_rows_and_borders->data[0], // Receive buffer upper rows
+              bytesToSwap,                        // Receive count in MPI_BYTES
+              MPI_BYTE,                           // Receive data type
+              my_rank - 1,                        // Source rank
+              0,                                  // Tag
+              MPI_COMM_WORLD,                     // Communicator
+              MPI_STATUS_IGNORE                   // Status
+          );
+        }
+      }
+      // Odd ranks swap left first, then right
+      else
+      {
+        // printf("Rank %d tries to send/receive %d bytes with rank %d The offset is %ld.\n", my_rank, bytesToSwap, my_rank - 1, send_counts[my_rank] / sizeof(pixel) - pixels_to_swap);
+        MPI_Sendrecv(
+            my_image_rows_and_borders->data[1], // Send buffer upper rows // ! Fix +1
+            bytesToSwap,                        // How many MPI_BYTES to send
+            MPI_BYTE,                           // Send type
+            my_rank - 1,                        // Receiver rank
+            0,                                  // Tag
+            my_image_rows_and_borders->data[0], // Receive buffer upper rows
+            bytesToSwap,                        // Receive count in MPI_BYTES
+            MPI_BYTE,                           // Receive data type
+            my_rank - 1,                        // Source rank
+            0,                                  // Tag
+            MPI_COMM_WORLD,                     // Communicator
+            MPI_STATUS_IGNORE                   // Status
+        );
+        // printf("Rank %d tries to send/receive %d bytes with rank %d.\n", my_rank, bytesToSwap, my_rank + 1);
+        if (my_rank < world_size - 1)
+        {
+          MPI_Sendrecv(
+              // &my_rows[(send_counts[my_rank] / sizeof(pixel)) - pixels_to_swap], // Send the last rows in my_rows
+              my_image_rows_and_borders->data[my_image_rows_and_borders->height - 2], // Send buffer lower rows // ! Fix
+              bytesToSwap,                                                            // How many MPI_BYTES to send
+              MPI_BYTE,                                                               // Send type
+              my_rank + 1,                                                            // Receiver rank
+              0,                                                                      // Tag
+              my_image_rows_and_borders->data[my_image_rows_and_borders->height - 1], // Receive buffer lower rows
+              bytesToSwap,                                                            // Receive count in MPI_BYTES
+              MPI_BYTE,                                                               // Receive data type
+              my_rank + 1,                                                            // Source rank
+              0,                                                                      // Tag
+              MPI_COMM_WORLD,                                                         // Communicator
+              MPI_STATUS_IGNORE                                                       // Status
+          );
+        }
+      }
+    }
+
+    printf("Rank %d completed border exhange for iteration %d\n", my_rank, 1);
+
+    bmpImage *processImage = newBmpImage(my_image_rows_and_borders->width, my_image_rows_and_borders->height);
+    for (unsigned int i = 0; i < iterations; i++)
+    {
+      applyKernel(processImage->data,
+                  my_image_rows_and_borders->data,
+                  my_image_rows_and_borders->width,
+                  my_image_rows_and_borders->height,
+                  kernels[kernelIndex],
+                  kernelDims[kernelIndex],
+                  kernelFactors[kernelIndex]);
+      swapImage(&processImage, &my_image_rows_and_borders);
+    }
+    freeBmpImage(processImage);
+
+    /* End border swapping and image processing  */
+
     /* Start the gathering! The image is now fully processed, only combining it remains. */
 
     // TODO: use my_image_rows_and_borders?
@@ -311,32 +443,29 @@ int main(int argc, char **argv)
 
     // TODO: Use ->rawData instead
     // Use a 1D array so that it is easier to gather
-    /*pixel *flat_image = calloc(1, send_counts[my_rank]);
-    for (int row = 0; row < number_of_my_rows; row++)
+    pixel *flat_image = calloc(1, send_counts[my_rank]);
+    for (int y = 0; y < number_of_my_rows; y++)
     {
-      for (int col = 0; col < imageDimensions->width; col++)
+      for (int x = 0; x < imageDimensions->width; x++)
       {
-        flat_image[row * imageDimensions->width + col] = my_image_rows_and_borders->data[row + number_of_rows_to_swap][col];
+        flat_image[y * imageDimensions->width + x] = my_image_rows_and_borders->data[y + number_of_rows_to_swap][x];
       }
-    }*/
+    }
 
     //MPI_Gatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype,void *recvbuf, const int *recvcounts, const int *displs,MPI_Datatype recvtype, int root, MPI_Comm comm);
     MPI_Gatherv(
-        my_rows,              // ! Temp
+        flat_image,           // Send buffer
         send_counts[my_rank], // Send the entire buffer
-        MPI_BYTE,             //
+        MPI_BYTE,             // Send type
         receiveBuffer,        // Receive buffer
-        send_counts,          // ! in doubt
-        displacements,        // ! in doubt
-        MPI_BYTE,             //
-        0,                    //
-        MPI_COMM_WORLD);      //
+        send_counts,          //
+        displacements,        //
+        MPI_BYTE,             // Receive type
+        0,                    // Master rank
+        MPI_COMM_WORLD);      // Communicator
 
     /* End gather */
   }
-
-  // Time measurement start
-  double start_time = MPI_Wtime();
 
   // Here we do the actual computation!
   // image->data is a 2-dimensional array of pixel which is accessed row first ([y][x])
@@ -355,13 +484,10 @@ int main(int argc, char **argv)
   }
   freeBmpImage(processImage);*/
 
-  // TODO Time measurement end
-  double end_time = MPI_Wtime();
-
   if (my_rank == 0)
   {
-    // TODO put time measurement in master
-    printf("Time spent: %.3f seconds\n", end_time - start_time);
+    double endTime = MPI_Wtime();
+    printf("Time spent: %.3f seconds\n", endTime - startTime);
   }
 
   // Save the image
