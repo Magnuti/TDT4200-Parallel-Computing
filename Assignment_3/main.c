@@ -217,7 +217,7 @@ int main(int argc, char **argv)
   }
 
   image_dimensions_t *imageDimensions = calloc(1, sizeof(image_dimensions_t));
-  pixel *receiveBuffer;
+  pixel *receiveBuffer; // Used by master at MPI_Gatherv
 
   double startTime, endTime;
 
@@ -237,9 +237,6 @@ int main(int argc, char **argv)
     imageDimensions->width = image->width;
     imageDimensions->height = image->height;
     imageDimensions->kernelIndex = kernelIndex;
-
-    // Same size as sendBuffer of course
-    receiveBuffer = (pixel *)calloc(image->width * image->height, sizeof(pixel));
 
     // Start time measurement before any MPI communication takes place
     startTime = MPI_Wtime();
@@ -303,14 +300,7 @@ int main(int argc, char **argv)
     bmpImage *my_image_rows_and_borders = newBmpImage(imageDimensions->width, number_of_my_rows + number_of_rows_to_swap * 2);
 
     // Puts my_rows inside my_image_rows_and_borders
-    //* Inefficient code..
-    for (int y = 0; y < number_of_my_rows; y++)
-    {
-      for (int x = 0; x < imageDimensions->width; x++)
-      {
-        my_image_rows_and_borders->data[number_of_rows_to_swap + y][x] = my_rows[y * imageDimensions->width + x];
-      }
-    }
+    memcpy(&my_image_rows_and_borders->rawdata[number_of_rows_to_swap * imageDimensions->width], my_rows, send_counts[my_rank]);
 
     free(my_rows);
 
@@ -410,7 +400,9 @@ int main(int argc, char **argv)
       }
 
       // Now we have the borders, so we can start the convolution with our kernel
-
+      // Here we do the actual computation!
+      // image->data is a 2-dimensional array of pixel which is accessed row first ([y][x])
+      // each pixel is a struct of 3 unsigned char for the red, blue and green colour channel
       bmpImage *processImage = newBmpImage(my_image_rows_and_borders->width, my_image_rows_and_borders->height);
       applyKernel(processImage->data,
                   my_image_rows_and_borders->data,
@@ -423,22 +415,17 @@ int main(int argc, char **argv)
       freeBmpImage(processImage);
     }
 
-    /* End border swapping and image processing  */
+    /* End border swapping and image processing iterations */
 
     /* Start the gathering! The image is now fully processed, only combining it remains. */
 
-    // TODO: use my_image_rows_and_borders?
-    // bmpImage *my_image_rows_and_borders = newBmpImage(image_dimensions->image_width, number_of_my_rows + number_of_rows_to_swap * 2);
-
-    // TODO: Use ->rawData instead
-    // Use a 1D array so that it is easier to gather
+    // Use a 1D pixel-array so that it is easier to gather
     pixel *flat_image = calloc(1, send_counts[my_rank]);
-    for (int y = 0; y < number_of_my_rows; y++)
+    memcpy(flat_image, &my_image_rows_and_borders->rawdata[number_of_rows_to_swap * imageDimensions->width], send_counts[my_rank]);
+
+    if (my_rank == 0)
     {
-      for (int x = 0; x < imageDimensions->width; x++)
-      {
-        flat_image[y * imageDimensions->width + x] = my_image_rows_and_borders->data[y + number_of_rows_to_swap][x];
-      }
+      receiveBuffer = (pixel *)calloc(imageDimensions->width * imageDimensions->height, sizeof(pixel));
     }
 
     //MPI_Gatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype,void *recvbuf, const int *recvcounts, const int *displs,MPI_Datatype recvtype, int root, MPI_Comm comm);
@@ -447,31 +434,15 @@ int main(int argc, char **argv)
         send_counts[my_rank], // Send the entire buffer
         MPI_BYTE,             // Send type
         receiveBuffer,        // Receive buffer
-        send_counts,          //
-        displacements,        //
+        send_counts,          // Same as with Scatterv
+        displacements,        // Same as with Scatterv
         MPI_BYTE,             // Receive type
         0,                    // Master rank
         MPI_COMM_WORLD);      // Communicator
 
+    free(flat_image);
     /* End gather */
   }
-
-  // Here we do the actual computation!
-  // image->data is a 2-dimensional array of pixel which is accessed row first ([y][x])
-  // each pixel is a struct of 3 unsigned char for the red, blue and green colour channel
-  /*bmpImage *processImage = newBmpImage(image->width, image->height);
-  for (unsigned int i = 0; i < iterations; i++)
-  {
-    applyKernel(processImage->data,
-                image->data,
-                image->width,
-                image->height,
-                kernels[kernelIndex],
-                kernelDims[kernelIndex],
-                kernelFactors[kernelIndex]);
-    swapImage(&processImage, &image);
-  }
-  freeBmpImage(processImage);*/
 
   if (my_rank == 0)
   {
@@ -497,6 +468,8 @@ int main(int argc, char **argv)
       goto error_exit;
     };
   }
+
+  free(imageDimensions);
 
 graceful_exit:
   ret = 0;
