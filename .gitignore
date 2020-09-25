@@ -5,6 +5,8 @@
 *.exe
 *.onetoc2
 *.ppt
+*.pdf
+
 
 # C
 *.o
@@ -15,3 +17,8 @@
 
 # Assignment 2
 **/Assignment 2/crack
+
+# Assignment 3
+!**/Assignment_3/Assignment_3.pdf
+**/Assignment_3/after.bmp
+**/Assignment_3/main
