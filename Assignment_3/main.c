@@ -209,8 +209,14 @@ int main(int argc, char **argv)
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
+  bmpImage *image = newBmpImage(0, 0);
+  if (image == NULL)
+  {
+    fprintf(stderr, "Could not allocate new image!\n");
+    goto error_exit;
+  }
+
   image_dimensions_t *imageDimensions = calloc(1, sizeof(image_dimensions_t));
-  pixel *sendBuffer;
   pixel *receiveBuffer;
 
   double startTime, endTime;
@@ -220,13 +226,6 @@ int main(int argc, char **argv)
    */
   if (my_rank == 0)
   {
-    bmpImage *image = newBmpImage(0, 0);
-    if (image == NULL)
-    {
-      fprintf(stderr, "Could not allocate new image!\n");
-      goto error_exit;
-    }
-
     if (loadBmpImage(image, input) != 0)
     {
       fprintf(stderr, "Could not load bmp image '%s'!\n", input);
@@ -239,17 +238,8 @@ int main(int argc, char **argv)
     imageDimensions->height = image->height;
     imageDimensions->kernelIndex = kernelIndex;
 
-    // Copy image->rawdata
-    sendBuffer = (pixel *)calloc(image->width * image->height, sizeof(pixel));
-    for (int i = 0; i < image->height * image->width; i++)
-    {
-      sendBuffer[i] = image->rawdata[i]; //* Hmm
-    }
-
     // Same size as sendBuffer of course
     receiveBuffer = (pixel *)calloc(image->width * image->height, sizeof(pixel));
-
-    freeBmpImage(image);
 
     // Start time measurement before any MPI communication takes place
     startTime = MPI_Wtime();
@@ -264,6 +254,8 @@ int main(int argc, char **argv)
       MPI_COMM_WORLD);            // Communicator
 
   /* Start row scatter */
+  // We need all this in a scope because C99 standards -> we cannot goto places with unitialized
+  // variables, therefore we limit them to this scope.
   {
     int rowSize = imageDimensions->width * sizeof(pixel); // Width * sizeof(pixel)
     int send_counts[world_size];                          // How many bytes (rows * row_size) to send
@@ -282,18 +274,13 @@ int main(int argc, char **argv)
     for (int i = 1; i < world_size; i++)
     {
       displacements[i] = displacements[i - 1] + send_counts[i - 1];
-      if (my_rank == 0)
-      {
-        // printf("Displacements %d: %d:\n", i, displacements[i]);
-        // Maybe entire displacements should go into master
-      }
     }
 
     pixel *my_rows = calloc(1, send_counts[my_rank]);
 
     // MPI_Scatterv(send_buffer, send_counts, displacements, send_type, recv_buffer, recv_count, recv_type, 0, communicator);
     MPI_Scatterv(
-        sendBuffer,           // Send buffer
+        image->rawdata,       // Send buffer
         send_counts,          // Array of length world_size -> how many rows to send to each process e.g. [2, 2, 1] * row_size
         displacements,        // Array of length world_size -> the offset of the send_buffer of where to start sending data to a process
         MPI_BYTE,             // Send type
@@ -302,6 +289,8 @@ int main(int argc, char **argv)
         MPI_BYTE,             // Receive type
         0,
         MPI_COMM_WORLD);
+
+    freeBmpImage(image);
 
     int number_of_my_rows = send_counts[my_rank] / rowSize;
 
