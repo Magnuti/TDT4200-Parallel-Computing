@@ -5,8 +5,9 @@
 *.exe
 *.onetoc2
 *.ppt
-*.pdf
 
+Slides/
+/An\ Introduction\ to\ Parallel\ Programming.pdf
 
 # C
 *.o
@@ -19,6 +20,5 @@
 **/Assignment 2/crack
 
 # Assignment 3
-!**/Assignment_3/Assignment_3.pdf
 **/Assignment_3/after.bmp
 **/Assignment_3/main
