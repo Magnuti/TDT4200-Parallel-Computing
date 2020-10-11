@@ -165,8 +165,7 @@ crack(ExtendedCrackResult *result, Options *options, Dictionary *dict,
     config.symbols =
         calloc(options->max_length, MAX_DICT_ELEMENT_LENGTH + 1);
 
-    // TODO: Get maximum number of threads
-    size_t num_threads = 1;
+    size_t num_threads = 24;
 
     CrackJob *jobs = calloc(num_threads, sizeof(CrackJob));
     for (size_t i = 0; i < num_threads; i++)
@@ -177,8 +176,7 @@ crack(ExtendedCrackResult *result, Options *options, Dictionary *dict,
     CrackResult *results = calloc(num_threads, sizeof(CrackResult));
 
     // Start time measurement
-    // TODO: get omp walltime
-    double start_time = 0;
+    double start_time = omp_get_wtime();
 
     // Try probes until the status changes (when a match is found or the search space is exhausted)
     while (result->status == STATUS_PENDING)
@@ -194,11 +192,9 @@ crack(ExtendedCrackResult *result, Options *options, Dictionary *dict,
             }
         }
 
-        // TODO: Parallelize using omp
-#pragma omp single
+#pragma omp parallel for
+        for (size_t tid = 0; tid < num_threads; tid++)
         {
-            // TODO: Get thread index
-            size_t tid = 0;
             crack_job(&results[tid], &jobs[tid]);
         }
 
@@ -233,8 +229,7 @@ crack(ExtendedCrackResult *result, Options *options, Dictionary *dict,
     }
 
     // End time measurement
-    // TODO: get omp walltime
-    double end_time = 0;
+    double end_time = omp_get_wtime();
     result->duration = end_time - start_time;
 
     free(config.dict_positions);
