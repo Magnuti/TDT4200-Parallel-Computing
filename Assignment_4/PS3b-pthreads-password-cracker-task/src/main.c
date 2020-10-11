@@ -170,8 +170,7 @@ crack(ExtendedCrackResult *result, Options *options, Dictionary *dict,
     config.symbols =
         calloc(options->max_length, MAX_DICT_ELEMENT_LENGTH + 1);
 
-    // TODO: Change to your maximum thread count (e.g. 4)
-#define MAX_THREADS 1
+#define MAX_THREADS 24
     CrackJob *jobs = calloc(MAX_THREADS, sizeof(CrackJob));
     for (size_t i = 0; i < MAX_THREADS; i++)
     {
@@ -181,7 +180,7 @@ crack(ExtendedCrackResult *result, Options *options, Dictionary *dict,
     CrackResult *results = calloc(MAX_THREADS, sizeof(CrackResult));
     Args *args = (Args *)calloc(MAX_THREADS, sizeof(Args));
 
-    // TODO: Initialize pthread_t
+    pthread_t threads[MAX_THREADS];
 
     // Start time measurement
     struct timespec start_time, end_time;
@@ -205,13 +204,20 @@ crack(ExtendedCrackResult *result, Options *options, Dictionary *dict,
 
         for (size_t i = 0; i < MAX_THREADS; i++)
         {
-            // TODO: Spawn each pthread
-            crack_job(&args[i]);
+            pthread_create(
+                &threads[i], // Thread id
+                NULL,        // Thread attribute
+                crack_job,   // Thread function
+                &args[i]     // Thread arg
+            );
         }
 
         for (size_t i = 0; i < MAX_THREADS; i++)
         {
-            // TODO: Join each pthread
+            pthread_join(
+                threads[i], // Thread to finish
+                NULL        // Result value
+            );
         }
 
         // Handle results
