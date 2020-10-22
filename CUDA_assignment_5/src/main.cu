@@ -18,14 +18,10 @@ static void handle_result(Options *options, ExtendedCrackResult *result, Overvie
 static void handle_overview_result(Options *options, OverviewCrackResult *overview_result);
 __global__ static void crack_job(CrackResult results[], CrackJob jobs[]);
 
-// TODO Run the code on the school machine before submitting
-
-// TODO Get size from https://developer.nvidia.com/blog/cuda-pro-tip-occupancy-api-simplifies-launch-configuration/
-
-#define GRID_SIZE 40 // 40 streaming multiprocessors on my GPU, so good number?
+#define GRID_SIZE 40 // 40 streaming multiprocessors on my GPU, so clean number. May adjust later.
 
 // The number of threads per block should be a round multiple of the warp size
-#define BLOCK_SIZE 32 * 2 // My GPU has 64 CUDA cores, so good number?
+#define BLOCK_SIZE 32 * 2 // My GPU has 64 CUDA cores, so clean number. May adjust later.
 
 #define TOTAL_THREAD_COUNT GRID_SIZE *BLOCK_SIZE
 #define USED_DEVICE 0
@@ -161,7 +157,6 @@ static bool init_cuda()
     printf("\tPer-block shared memory: %.1fkiB\n", prop.sharedMemPerBlock / 1024.0);
     printf("\tPer-block registers: %d\n", prop.regsPerBlock);
 
-    // TODO copy and paste the error check code below where suited
     // Check for any previous errors
     cudaError_t error = cudaPeekAtLastError();
     if (error)
@@ -216,7 +211,6 @@ static void crack(ExtendedCrackResult *total_result, Options *options, Dictionar
 
     int number_of_jobs = TOTAL_THREAD_COUNT; // TODO
 
-    // TODO allocate host and device arrays for CrackJobs and CrackResults
     // Host (CPU) arrays
     CrackJob *h_crackJobs = (CrackJob *)malloc(number_of_jobs * sizeof(CrackJob));
     CrackResult *h_crackResults = (CrackResult *)malloc(number_of_jobs * sizeof(CrackResult));
@@ -237,7 +231,6 @@ static void crack(ExtendedCrackResult *total_result, Options *options, Dictionar
         printf("New while loop started\n");
         // Prepare new jobs
         bool more_probes = true;
-        // TODO fill host job array with new jobs
         for (size_t i = 0; i < number_of_jobs; i++)
         {
             if (!prepare_job(&h_crackJobs[i], entry, &config, options, dict))
@@ -248,19 +241,13 @@ static void crack(ExtendedCrackResult *total_result, Options *options, Dictionar
         }
 
         // Copy jobs to device
-        // TODO
         cudaMemcpy(d_crackJobs, h_crackJobs, number_of_jobs * sizeof(CrackJob), cudaMemcpyHostToDevice);
 
         // Start kernel
-        // TODO
-        crack_job<<<GRID_SIZE, BLOCK_SIZE>>>(d_crackResults, d_crackJobs); // ! This one cant be right? pointer ---> []
+        crack_job<<<GRID_SIZE, BLOCK_SIZE>>>(d_crackResults, d_crackJobs);
         // crack_job(d_crackResults, d_crackJobs);
 
-        // ! what is this x[tid] = (float) threadIdx.x; ?? see slides 3 page 33
-        cudaDeviceSynchronize(); // ? Required?
-
         // Copy results from device
-        // TODO
         cudaMemcpy(h_crackResults, d_crackResults, number_of_jobs * sizeof(CrackResult), cudaMemcpyDeviceToHost);
 
         // Check for error
