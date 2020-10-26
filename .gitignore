@@ -5,6 +5,7 @@
 *.exe
 *.onetoc2
 *.ppt
+/.vscode
 
 Slides/
 /An\ Introduction\ to\ Parallel\ Programming.pdf
