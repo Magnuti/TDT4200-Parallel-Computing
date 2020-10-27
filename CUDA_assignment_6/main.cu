@@ -138,6 +138,48 @@ void applyFilter(pixel *out, pixel *in, unsigned int width, unsigned int height,
   }
 }
 
+// Apply convolutional filter on image data
+__global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
+{
+  unsigned int const filterCenter = (filterDim / 2);
+  for (unsigned int y = 0; y < height; y++)
+  {
+    for (unsigned int x = 0; x < width; x++)
+    {
+      int ar = 0, ag = 0, ab = 0;
+      for (unsigned int ky = 0; ky < filterDim; ky++)
+      {
+        int nky = filterDim - 1 - ky;
+        for (unsigned int kx = 0; kx < filterDim; kx++)
+        {
+          int nkx = filterDim - 1 - kx;
+
+          int yy = y + (ky - filterCenter);
+          int xx = x + (kx - filterCenter);
+          if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
+          {
+            ar += in[yy * width + xx].r * filter[nky * filterDim + nkx];
+            ag += in[yy * width + xx].g * filter[nky * filterDim + nkx];
+            ab += in[yy * width + xx].b * filter[nky * filterDim + nkx];
+          }
+        }
+      }
+
+      ar *= filterFactor;
+      ag *= filterFactor;
+      ab *= filterFactor;
+
+      ar = (ar < 0) ? 0 : ar;
+      ag = (ag < 0) ? 0 : ag;
+      ab = (ab < 0) ? 0 : ab;
+
+      out[y * width + x].r = (ar > 255) ? 255 : ar;
+      out[y * width + x].g = (ag > 255) ? 255 : ag;
+      out[y * width + x].b = (ab > 255) ? 255 : ab;
+    }
+  }
+}
+
 void help(char const *exec, char const opt, char const *optarg)
 {
   FILE *out = stdout;
@@ -254,43 +296,80 @@ int main(int argc, char **argv)
 
   printf("Apply filter '%s' on image with %u x %u pixels for %u iterations\n", filterNames[filterIndex], image->width, image->height, iterations);
 
-  // TODO: implement time measurement from here
+  // Time measurement init
+  cudaEvent_t start_time, end_time;
+  cudaEventCreate(&start_time);
+  cudaEventCreate(&end_time);
 
   // Here we do the actual computation!
   // image->data is a 2-dimensional array of pixel which is accessed row first ([y][x])
   // image->rawdata is a 1-dimensional array of pixel containing the same data as image->data
   // each pixel is a struct of 3 unsigned char for the red, blue and green colour channel
-  bmpImage *processImage = newBmpImage(image->width, image->height);
+  // bmpImage *processImage = newBmpImage(image->width, image->height);
 
   // TODO: Cuda malloc and memcpy the rawdata from the images, from host side to device side
+  int image_size = image->width * image->height * sizeof(pixel);
+  int filter_size = filterDims[filterIndex] * filterDims[filterIndex] * sizeof(int);
+
+  pixel *d_image_rawdata, *d_process_image_rawdata;
+  int *d_filter;
+
+  cudaMalloc((void **)&d_image_rawdata, image_size);
+  cudaMalloc((void **)&d_process_image_rawdata, image_size);
+  cudaMalloc((void **)&d_filter, filter_size);
+
+  cudaMemcpy(d_image_rawdata, image->rawdata, image_size, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_filter, filters[filterIndex], filter_size, cudaMemcpyHostToDevice);
+
+  // ? Do we also need to copy the filters?
+  // ? __device__ maybe
 
   // TODO: Define the gridSize and blockSize, e.g. using dim3 (see Section 2.2. in CUDA Programming Guide)
 
-  // TODO: Intialize and start CUDA timer
+  // Start time measurement
+  cudaEventRecord(start_time);
 
   for (unsigned int i = 0; i < iterations; i++)
   {
     // TODO: Implement kernel call instead of serial implementation
-    applyFilter(processImage->rawdata,
-                image->rawdata,
-                image->width,
-                image->height,
-                filters[filterIndex],
-                filterDims[filterIndex],
-                filterFactors[filterIndex]);
-    swapImage(&processImage, &image);
-    //swapImageRawdata(&?, &?);
+    applyFilter_CUDA_Kernel<<<1, 1>>>(d_process_image_rawdata, // Out
+                                      d_image_rawdata,         // In
+                                      image->width,
+                                      image->height,
+                                      // filters[filterIndex],
+                                      d_filter,
+                                      filterDims[filterIndex],
+                                      filterFactors[filterIndex]);
+    // swapImage(&processImage, &image);
+    swapImageRawdata(&d_process_image_rawdata, &d_image_rawdata);
   }
 
-  // TODO: Stop CUDA timer
+  // End time measurement
+  cudaEventRecord(end_time);
 
-  // TODO: Copy back rawdata from images
+  cudaMemcpy(image->rawdata, d_image_rawdata, image_size, cudaMemcpyDeviceToHost);
 
-  // TODO: Calculate and print elapsed time
+  cudaFree(d_image_rawdata);
+  cudaFree(d_process_image_rawdata);
+  cudaFree(d_filter);
+
+  // Blocks CPU execution until end_time is recorded
+  cudaEventSynchronize(end_time);
+
   float spentTime = 0.0;
+  cudaEventElapsedTime(&spentTime, start_time, end_time);
   printf("Time spent: %.3f seconds\n", spentTime / 1000);
 
-  freeBmpImage(processImage);
+  cudaEventDestroy(start_time);
+  cudaEventDestroy(end_time);
+
+  // Check for error
+  cudaError_t error = cudaPeekAtLastError();
+  if (error)
+  {
+    fprintf(stderr, "A CUDA error has occurred while cracking: %s\n", cudaGetErrorString(error));
+  }
+
   //Write the image back to disk
   if (saveBmpImage(image, output) != 0)
   {
