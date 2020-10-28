@@ -24,6 +24,8 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
   }
 }
 
+#define BLOCK_DIMENSION 16 // A thread block size of 16x16 (256 threads) is a common choice (from https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#thread-hierarchy)
+
 // Convolutional Filter Examples, each with dimension 3,
 // gaussian filter with dimension 5
 
@@ -141,43 +143,47 @@ void applyFilter(pixel *out, pixel *in, unsigned int width, unsigned int height,
 // Apply convolutional filter on image data
 __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
 {
-  unsigned int const filterCenter = (filterDim / 2);
-  for (unsigned int y = 0; y < height; y++)
+  // TODO There is a bug somewhere. The top part of the final image has a horizontal line which gets bigger with the number of iterations
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+  // Handle out of bounds
+  if (x >= width || y >= height)
   {
-    for (unsigned int x = 0; x < width; x++)
+    return;
+  }
+
+  unsigned int const filterCenter = (filterDim / 2);
+  int ar = 0, ag = 0, ab = 0;
+  for (unsigned int ky = 0; ky < filterDim; ky++)
+  {
+    int nky = filterDim - 1 - ky;
+    for (unsigned int kx = 0; kx < filterDim; kx++)
     {
-      int ar = 0, ag = 0, ab = 0;
-      for (unsigned int ky = 0; ky < filterDim; ky++)
+      int nkx = filterDim - 1 - kx;
+
+      int yy = y + (ky - filterCenter);
+      int xx = x + (kx - filterCenter);
+      if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
       {
-        int nky = filterDim - 1 - ky;
-        for (unsigned int kx = 0; kx < filterDim; kx++)
-        {
-          int nkx = filterDim - 1 - kx;
-
-          int yy = y + (ky - filterCenter);
-          int xx = x + (kx - filterCenter);
-          if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
-          {
-            ar += in[yy * width + xx].r * filter[nky * filterDim + nkx];
-            ag += in[yy * width + xx].g * filter[nky * filterDim + nkx];
-            ab += in[yy * width + xx].b * filter[nky * filterDim + nkx];
-          }
-        }
+        ar += in[yy * width + xx].r * filter[nky * filterDim + nkx];
+        ag += in[yy * width + xx].g * filter[nky * filterDim + nkx];
+        ab += in[yy * width + xx].b * filter[nky * filterDim + nkx];
       }
-
-      ar *= filterFactor;
-      ag *= filterFactor;
-      ab *= filterFactor;
-
-      ar = (ar < 0) ? 0 : ar;
-      ag = (ag < 0) ? 0 : ag;
-      ab = (ab < 0) ? 0 : ab;
-
-      out[y * width + x].r = (ar > 255) ? 255 : ar;
-      out[y * width + x].g = (ag > 255) ? 255 : ag;
-      out[y * width + x].b = (ab > 255) ? 255 : ab;
     }
   }
+
+  ar *= filterFactor;
+  ag *= filterFactor;
+  ab *= filterFactor;
+
+  ar = (ar < 0) ? 0 : ar;
+  ag = (ag < 0) ? 0 : ag;
+  ab = (ab < 0) ? 0 : ab;
+
+  out[y * width + x].r = (ar > 255) ? 255 : ar;
+  out[y * width + x].g = (ag > 255) ? 255 : ag;
+  out[y * width + x].b = (ab > 255) ? 255 : ab;
 }
 
 void help(char const *exec, char const opt, char const *optarg)
@@ -324,7 +330,11 @@ int main(int argc, char **argv)
   // ? Do we also need to copy the filters?
   // ? __device__ maybe
 
-  // TODO: Define the gridSize and blockSize, e.g. using dim3 (see Section 2.2. in CUDA Programming Guide)
+  // gridSize and blockSize inspired from Section 2.2. in the CUDA Programming Guide
+  dim3 blockSize(BLOCK_DIMENSION, BLOCK_DIMENSION); // Threads per block
+  printf("Launching a grid of dimension (%d width * %d height)\n", image->width / blockSize.x, image->height / blockSize.y);
+  printf("Each grid has a thread block of dimension (%d width * %d height)\n", blockSize.x, blockSize.y);
+  dim3 gridSize(image->width / blockSize.x, image->height / blockSize.y); // Number of blocks
 
   // Start time measurement
   cudaEventRecord(start_time);
@@ -332,14 +342,15 @@ int main(int argc, char **argv)
   for (unsigned int i = 0; i < iterations; i++)
   {
     // TODO: Implement kernel call instead of serial implementation
-    applyFilter_CUDA_Kernel<<<1, 1>>>(d_process_image_rawdata, // Out
-                                      d_image_rawdata,         // In
-                                      image->width,
-                                      image->height,
-                                      // filters[filterIndex],
-                                      d_filter,
-                                      filterDims[filterIndex],
-                                      filterFactors[filterIndex]);
+    applyFilter_CUDA_Kernel<<<gridSize, blockSize>>>(
+        d_process_image_rawdata, // Out
+        d_image_rawdata,         // In
+        image->width,
+        image->height,
+        // filters[filterIndex],
+        d_filter,
+        filterDims[filterIndex],
+        filterFactors[filterIndex]);
     // swapImage(&processImage, &image);
     swapImageRawdata(&d_process_image_rawdata, &d_image_rawdata);
   }
