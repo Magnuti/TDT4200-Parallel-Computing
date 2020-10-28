@@ -268,6 +268,10 @@ int main(int argc, char **argv)
 
   // TODO: Intialize and start CUDA timer
 
+  clock_t start_time, end_time;
+  double cpu_time_used;
+
+  start_time = clock();
   for (unsigned int i = 0; i < iterations; i++)
   {
     // TODO: Implement kernel call instead of serial implementation
@@ -282,13 +286,16 @@ int main(int argc, char **argv)
     //swapImageRawdata(&?, &?);
   }
 
+  end_time = clock();
+  cpu_time_used = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
+
   // TODO: Stop CUDA timer
 
   // TODO: Copy back rawdata from images
 
   // TODO: Calculate and print elapsed time
   float spentTime = 0.0;
-  printf("Time spent: %.3f seconds\n", spentTime / 1000);
+  printf("Time spent: %.3f seconds\n", cpu_time_used);
 
   freeBmpImage(processImage);
   //Write the image back to disk
