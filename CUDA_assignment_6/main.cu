@@ -140,10 +140,12 @@ void applyFilter(pixel *out, pixel *in, unsigned int width, unsigned int height,
   }
 }
 
+// Task 1-4
 // Apply convolutional filter on image data
-__global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
+/*__global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
 {
   // TODO There is a bug somewhere. The top part of the final image has a horizontal line which gets bigger with the number of iterations
+
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -165,6 +167,93 @@ __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int widt
       int yy = y + (ky - filterCenter);
       int xx = x + (kx - filterCenter);
       if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
+      {
+        ar += in[yy * width + xx].r * filter[nky * filterDim + nkx];
+        ag += in[yy * width + xx].g * filter[nky * filterDim + nkx];
+        ab += in[yy * width + xx].b * filter[nky * filterDim + nkx];
+      }
+    }
+  }
+
+  ar *= filterFactor;
+  ag *= filterFactor;
+  ab *= filterFactor;
+
+  ar = (ar < 0) ? 0 : ar;
+  ag = (ag < 0) ? 0 : ag;
+  ab = (ab < 0) ? 0 : ab;
+
+  out[y * width + x].r = (ar > 255) ? 255 : ar;
+  out[y * width + x].g = (ag > 255) ? 255 : ag;
+  out[y * width + x].b = (ab > 255) ? 255 : ab;
+}*/
+
+// Task 5
+// Apply convolutional filter on image data
+__global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
+{
+
+  // Now instead of using the filter directly from global memory, we want to copy the filter to shared memory.
+  // Dynamic shared memory because the filterDim is not known at compile time.
+
+  // This one holds all of the data
+  extern __shared__ int s[];
+
+  int *shared_filter = s;                                                // Length of filterDim * filterDim
+  pixel *shared_pixels = (pixel *)&shared_filter[filterDim * filterDim]; // Length of BLOCK_DIMENSION * BLOCK_DIMENSION
+
+  for (int i = 0; i < filterDim * filterDim; i++)
+  {
+    shared_filter[i] = filter[i];
+  }
+
+  // Sync to make sure that all threads have completed the loads to shared memory
+  __syncthreads();
+  // Now we can use shared_filter!
+
+  // Because shared memory is only shared between blocks, it makes sense to make the shared memory array for
+  // the image as big as the block, since each thread in the block changes one pixel.
+
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+  // Handle out of bounds
+  if (x >= width || y >= height)
+  {
+    // __syncthreads(); // ? Needed? Think so, to avoid deadlock
+    return;
+  }
+
+  // Set the position in the block to the correct value
+  shared_pixels[threadIdx.y * BLOCK_DIMENSION + threadIdx.x] = in[y * width + x];
+
+  // Sync to make sure that all threads have completed the loads to shared memory
+  __syncthreads();
+  // Now we can use shared_pixels!
+
+  unsigned int const filterCenter = (filterDim / 2);
+  int ar = 0, ag = 0, ab = 0;
+  for (unsigned int ky = 0; ky < filterDim; ky++)
+  {
+    int nky = filterDim - 1 - ky;
+    for (unsigned int kx = 0; kx < filterDim; kx++)
+    {
+      int nkx = filterDim - 1 - kx;
+
+      int yy = y + (ky - filterCenter);
+      int xx = x + (kx - filterCenter);
+
+      // Now, since the edge threads needs pixels outside the block's shared memory,
+      // we need to check its position.
+
+      if (xx >= 0 && xx < BLOCK_DIMENSION && yy >= 0 && yy < BLOCK_DIMENSION)
+      {
+        ar += shared_pixels[yy * BLOCK_DIMENSION + xx].r * shared_filter[nky * filterDim + nkx];
+        ag += shared_pixels[yy * BLOCK_DIMENSION + xx].g * shared_filter[nky * filterDim + nkx];
+        ab += shared_pixels[yy * BLOCK_DIMENSION + xx].b * shared_filter[nky * filterDim + nkx];
+      }
+      // Else if the normal code from task 1-4
+      else if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
       {
         ar += in[yy * width + xx].r * filter[nky * filterDim + nkx];
         ag += in[yy * width + xx].g * filter[nky * filterDim + nkx];
@@ -317,6 +406,7 @@ int main(int argc, char **argv)
   int image_size = image->width * image->height * sizeof(pixel);
   int filter_size = filterDims[filterIndex] * filterDims[filterIndex] * sizeof(int);
 
+  // We could also made all filters __device__ available, but it is simple to copy over only the needed one
   pixel *d_image_rawdata, *d_process_image_rawdata;
   int *d_filter;
 
@@ -341,8 +431,12 @@ int main(int argc, char **argv)
 
   for (unsigned int i = 0; i < iterations; i++)
   {
-    // TODO: Implement kernel call instead of serial implementation
-    applyFilter_CUDA_Kernel<<<gridSize, blockSize>>>(
+    // Task 2-3
+    // applyFilter_CUDA_Kernel<<<gridSize, blockSize>>>(
+
+    // Task 5
+    int sharedMemoryUsedPerBlock = filterDims[filterIndex] * filterDims[filterIndex] * sizeof(int) + BLOCK_DIMENSION * BLOCK_DIMENSION * sizeof(pixel);
+    applyFilter_CUDA_Kernel<<<gridSize, blockSize, sharedMemoryUsedPerBlock>>>(
         d_process_image_rawdata, // Out
         d_image_rawdata,         // In
         image->width,
