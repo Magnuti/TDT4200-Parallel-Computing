@@ -255,9 +255,9 @@ __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int widt
       // Else if the normal code from task 1-4
       else if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
       {
-        ar += in[yy * width + xx].r * filter[nky * filterDim + nkx];
-        ag += in[yy * width + xx].g * filter[nky * filterDim + nkx];
-        ab += in[yy * width + xx].b * filter[nky * filterDim + nkx];
+        ar += in[yy * width + xx].r * shared_filter[nky * filterDim + nkx];
+        ag += in[yy * width + xx].g * shared_filter[nky * filterDim + nkx];
+        ab += in[yy * width + xx].b * shared_filter[nky * filterDim + nkx];
       }
     }
   }
@@ -421,7 +421,19 @@ int main(int argc, char **argv)
   dim3 blockSize(BLOCK_DIMENSION, BLOCK_DIMENSION); // Threads per block
   printf("Launching a grid of dimension (%d width * %d height)\n", image->width / blockSize.x, image->height / blockSize.y);
   printf("Each grid has a thread block of dimension (%d width * %d height)\n", blockSize.x, blockSize.y);
-  dim3 gridSize(image->width / blockSize.x, image->height / blockSize.y); // Number of blocks
+
+  // We may need to add 1 extra block to width or height if the image's dimensions are not evenly divided by the block's dimension
+  int extraWidth = 0;
+  int extraHeight = 0;
+  if (image->width % blockSize.x != 0)
+  {
+    extraWidth = 1;
+  }
+  if (image->height % blockSize.y != 0)
+  {
+    extraHeight = 1;
+  }
+  dim3 gridSize(image->width / blockSize.x + extraWidth, image->height / blockSize.y + extraHeight); // Number of block
 
   // Start time measurement
   cudaEventRecord(start_time);
