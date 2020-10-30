@@ -392,6 +392,7 @@ int main(int argc, char **argv)
   printf("Apply filter '%s' on image with %u x %u pixels for %u iterations\n", filterNames[filterIndex], image->width, image->height, iterations);
 
   // Time measurement init
+  // Inspired from https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/
   cudaEvent_t start_time, end_time;
   cudaEventCreate(&start_time);
   cudaEventCreate(&end_time);
@@ -402,7 +403,6 @@ int main(int argc, char **argv)
   // each pixel is a struct of 3 unsigned char for the red, blue and green colour channel
   // bmpImage *processImage = newBmpImage(image->width, image->height);
 
-  // TODO: Cuda malloc and memcpy the rawdata from the images, from host side to device side
   int image_size = image->width * image->height * sizeof(pixel);
   int filter_size = filterDims[filterIndex] * filterDims[filterIndex] * sizeof(int);
 
@@ -416,9 +416,6 @@ int main(int argc, char **argv)
 
   cudaMemcpy(d_image_rawdata, image->rawdata, image_size, cudaMemcpyHostToDevice);
   cudaMemcpy(d_filter, filters[filterIndex], filter_size, cudaMemcpyHostToDevice);
-
-  // ? Do we also need to copy the filters?
-  // ? __device__ maybe
 
   // gridSize and blockSize inspired from Section 2.2. in the CUDA Programming Guide
   dim3 blockSize(BLOCK_DIMENSION, BLOCK_DIMENSION); // Threads per block
