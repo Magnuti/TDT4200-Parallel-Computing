@@ -61,4 +61,17 @@ As we can see, the parallelized GPU version is around $16.190/0.076=213$ times f
 | 10 | 0.011 |
 | 100 | 0.110 |
 
-As we can see, we actually have a slowdown from global memory.
+As we can see, we actually have a slowdown from global memory. For further improvements, we can also share the border pixels which must be access in global memory.
+
+### Task 6 - Occupancy
+After running the code with the occupancy API code from https://developer.nvidia.com/blog/cuda-pro-tip-occupancy-api-simplifies-launch-configuration/, this was our output:
+```
+BlockSizeInt 1024  
+minGridSizeInt 40  
+gridSizeInt 9118  
+The grid has thread blocks of dimension (32 width * 32 height)  
+Launching a grid of dimension (125 width * 73 height)  
+Launched blocks of size 1024=>(32x32). Theoretical occupancy: 1.000000  
+```
+
+Since our image is $4000x2334$, and we have one thread per pixel, we need $4000x2334=9 336 000$ threads. The result from the occupancy API gives us 9118 blocks of size 1024. Since $9118*1024=9 336 832$, have 832 spare threads.

@@ -142,10 +142,8 @@ void applyFilter(pixel *out, pixel *in, unsigned int width, unsigned int height,
 
 // Task 1-4
 // Apply convolutional filter on image data
-/*__global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
+__global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
 {
-  // TODO There is a bug somewhere. The top part of the final image has a horizontal line which gets bigger with the number of iterations
-
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -186,11 +184,11 @@ void applyFilter(pixel *out, pixel *in, unsigned int width, unsigned int height,
   out[y * width + x].r = (ar > 255) ? 255 : ar;
   out[y * width + x].g = (ag > 255) ? 255 : ag;
   out[y * width + x].b = (ab > 255) ? 255 : ab;
-}*/
+}
 
 // Task 5
 // Apply convolutional filter on image data
-__global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
+/*__global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
 {
 
   // Now instead of using the filter directly from global memory, we want to copy the filter to shared memory.
@@ -273,7 +271,7 @@ __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int widt
   out[y * width + x].r = (ar > 255) ? 255 : ar;
   out[y * width + x].g = (ag > 255) ? 255 : ag;
   out[y * width + x].b = (ab > 255) ? 255 : ab;
-}
+}*/
 
 void help(char const *exec, char const opt, char const *optarg)
 {
@@ -417,14 +415,38 @@ int main(int argc, char **argv)
   cudaMemcpy(d_image_rawdata, image->rawdata, image_size, cudaMemcpyHostToDevice);
   cudaMemcpy(d_filter, filters[filterIndex], filter_size, cudaMemcpyHostToDevice);
 
+  // Task 6
+  // From https://developer.nvidia.com/blog/cuda-pro-tip-occupancy-api-simplifies-launch-configuration/
+  int blockSizeInt;   // The launch configurator returned block size
+  int minGridSizeInt; // The minimum grid size needed to achieve the maximum occupancy for a full device launch
+  int gridSizeInt;    // The actual grid size needed, based on input size
+
+  cudaOccupancyMaxPotentialBlockSize(&minGridSizeInt, &blockSizeInt, applyFilter_CUDA_Kernel, 0, 0);
+
+  // Round up according to array size
+  gridSizeInt = (image->width * image->height + blockSizeInt - 1) / blockSizeInt;
+
+  if (blockSizeInt % 32 != 0)
+  {
+    printf("NOTE: blockSizeInt was not a multiple of 32: %f\n", float(blockSizeInt) / 32.0);
+  }
+
+  dim3 blockSize(blockSizeInt / 32, blockSizeInt / 32);
+
+  printf("BlockSizeInt %d\n", blockSizeInt);
+  printf("minGridSizeInt %d\n", minGridSizeInt);
+  printf("gridSizeInt %d\n", gridSizeInt);
+  // End Task 6
+
+  // We allocate one thread per pixel
   // gridSize and blockSize inspired from Section 2.2. in the CUDA Programming Guide
-  dim3 blockSize(BLOCK_DIMENSION, BLOCK_DIMENSION); // Threads per block
-  printf("Launching a grid of dimension (%d width * %d height)\n", image->width / blockSize.x, image->height / blockSize.y);
-  printf("Each grid has a thread block of dimension (%d width * %d height)\n", blockSize.x, blockSize.y);
+  // dim3 blockSize(BLOCK_DIMENSION, BLOCK_DIMENSION); // Threads per block
+  printf("The grid has thread blocks of dimension (%d width * %d height)\n", blockSize.x, blockSize.y);
 
   // We may need to add 1 extra block to width or height if the image's dimensions are not evenly divided by the block's dimension
   int extraWidth = 0;
   int extraHeight = 0;
+
   if (image->width % blockSize.x != 0)
   {
     extraWidth = 1;
@@ -433,7 +455,8 @@ int main(int argc, char **argv)
   {
     extraHeight = 1;
   }
-  dim3 gridSize(image->width / blockSize.x + extraWidth, image->height / blockSize.y + extraHeight); // Number of block
+  dim3 gridSize(image->width / blockSize.x + extraWidth, image->height / blockSize.y + extraHeight); // Number of blocks
+  printf("Launching a grid of dimension (%d width * %d height)\n", image->width / blockSize.x + extraWidth, image->height / blockSize.y + extraHeight);
 
   // Start time measurement
   cudaEventRecord(start_time);
@@ -441,11 +464,13 @@ int main(int argc, char **argv)
   for (unsigned int i = 0; i < iterations; i++)
   {
     // Task 2-3
-    // applyFilter_CUDA_Kernel<<<gridSize, blockSize>>>(
+    applyFilter_CUDA_Kernel<<<gridSize, blockSize>>>(
 
-    // Task 5
-    int sharedMemoryUsedPerBlock = filterDims[filterIndex] * filterDims[filterIndex] * sizeof(int) + BLOCK_DIMENSION * BLOCK_DIMENSION * sizeof(pixel);
-    applyFilter_CUDA_Kernel<<<gridSize, blockSize, sharedMemoryUsedPerBlock>>>(
+        // Task 5
+        // TODO Experiment with different bytes in shared memory. Share the border pixels so that we never have to access global memory for
+        // TODO the outside bounds.
+        // int sharedMemoryUsedPerBlock = filterDims[filterIndex] * filterDims[filterIndex] * sizeof(int) + BLOCK_DIMENSION * BLOCK_DIMENSION * sizeof(pixel);
+        // applyFilter_CUDA_Kernel<<<gridSize, blockSize, sharedMemoryUsedPerBlock>>>(
         d_process_image_rawdata, // Out
         d_image_rawdata,         // In
         image->width,
@@ -476,6 +501,19 @@ int main(int argc, char **argv)
 
   cudaEventDestroy(start_time);
   cudaEventDestroy(end_time);
+
+  // Task 6
+  cudaDeviceSynchronize();
+  // calculate theoretical occupancy
+  int maxActiveBlocks;
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, applyFilter_CUDA_Kernel, blockSizeInt, 0);
+  int device;
+  cudaDeviceProp props;
+  cudaGetDevice(&device);
+  cudaGetDeviceProperties(&props, device);
+  float occupancy = (maxActiveBlocks * blockSizeInt / props.warpSize) / (float)(props.maxThreadsPerMultiProcessor / props.warpSize);
+  printf("Launched blocks of size %d=>(%dx%d). Theoretical occupancy: %f\n", blockSizeInt, blockSize.x, blockSize.y, occupancy);
+  // End Task 6
 
   // Check for error
   cudaError_t error = cudaPeekAtLastError();
