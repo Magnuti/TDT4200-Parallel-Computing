@@ -61,7 +61,7 @@ As we can see, the parallelized GPU version is around $16.190/0.076=213$ times f
 | 10 | 0.011 |
 | 100 | 0.110 |
 
-As we can see, we actually have a slowdown from global memory. For further improvements, we can also share the border pixels which must be access in global memory.
+As we can see, we actually have a slowdown from global memory. For further improvements, we could share the border pixels which must be accessed in global memory.
 
 ### Task 6 - Occupancy
 After running the code with the occupancy API code from https://developer.nvidia.com/blog/cuda-pro-tip-occupancy-api-simplifies-launch-configuration/, this was our output:

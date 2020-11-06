@@ -467,8 +467,7 @@ int main(int argc, char **argv)
     applyFilter_CUDA_Kernel<<<gridSize, blockSize>>>(
 
         // Task 5
-        // TODO Experiment with different bytes in shared memory. Share the border pixels so that we never have to access global memory for
-        // TODO the outside bounds.
+        // TODO Experiment with different bytes in shared memory. Share the border pixels so that we never have to access global memory for the outside bounds.
         // int sharedMemoryUsedPerBlock = filterDims[filterIndex] * filterDims[filterIndex] * sizeof(int) + BLOCK_DIMENSION * BLOCK_DIMENSION * sizeof(pixel);
         // applyFilter_CUDA_Kernel<<<gridSize, blockSize, sharedMemoryUsedPerBlock>>>(
         d_process_image_rawdata, // Out
