@@ -208,7 +208,7 @@ crack(ExtendedCrackResult *result, Options *options, Dictionary *dict,
                 &threads[i], // Thread id
                 NULL,        // Thread attribute
                 crack_job,   // Thread function
-                &args[i]     // Thread arg
+                &args[i]     // Thread function args
             );
         }
 
