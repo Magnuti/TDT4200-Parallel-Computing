@@ -1,15 +1,9 @@
 # Common
 *.zip
 *.one
-*.docx
 *.exe
 *.onetoc2
-*.ppt
 /.vscode
-
-Slides/
-/An\ Introduction\ to\ Parallel\ Programming.pdf
-TDT4200\ Parallel Computing.pdf
 
 # C
 *.o
