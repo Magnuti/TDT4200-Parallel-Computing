@@ -98,97 +98,8 @@ void swapImage(bmpImage **one, bmpImage **two)
   *one = helper;
 }
 
-// Apply convolutional filter on image data
-void applyFilter(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
-{
-  unsigned int const filterCenter = (filterDim / 2);
-  for (unsigned int y = 0; y < height; y++)
-  {
-    for (unsigned int x = 0; x < width; x++)
-    {
-      int ar = 0, ag = 0, ab = 0;
-      for (unsigned int ky = 0; ky < filterDim; ky++)
-      {
-        int nky = filterDim - 1 - ky;
-        for (unsigned int kx = 0; kx < filterDim; kx++)
-        {
-          int nkx = filterDim - 1 - kx;
-
-          int yy = y + (ky - filterCenter);
-          int xx = x + (kx - filterCenter);
-          if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
-          {
-            ar += in[yy * width + xx].r * filter[nky * filterDim + nkx];
-            ag += in[yy * width + xx].g * filter[nky * filterDim + nkx];
-            ab += in[yy * width + xx].b * filter[nky * filterDim + nkx];
-          }
-        }
-      }
-
-      ar *= filterFactor;
-      ag *= filterFactor;
-      ab *= filterFactor;
-
-      ar = (ar < 0) ? 0 : ar;
-      ag = (ag < 0) ? 0 : ag;
-      ab = (ab < 0) ? 0 : ab;
-
-      out[y * width + x].r = (ar > 255) ? 255 : ar;
-      out[y * width + x].g = (ag > 255) ? 255 : ag;
-      out[y * width + x].b = (ab > 255) ? 255 : ab;
-    }
-  }
-}
-
-// Task 1-4
-// Apply convolutional filter on image data
-__global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
-{
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-  // Handle out of bounds
-  if (x >= width || y >= height)
-  {
-    return;
-  }
-
-  unsigned int const filterCenter = (filterDim / 2);
-  int ar = 0, ag = 0, ab = 0;
-  for (unsigned int ky = 0; ky < filterDim; ky++)
-  {
-    int nky = filterDim - 1 - ky;
-    for (unsigned int kx = 0; kx < filterDim; kx++)
-    {
-      int nkx = filterDim - 1 - kx;
-
-      int yy = y + (ky - filterCenter);
-      int xx = x + (kx - filterCenter);
-      if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
-      {
-        ar += in[yy * width + xx].r * filter[nky * filterDim + nkx];
-        ag += in[yy * width + xx].g * filter[nky * filterDim + nkx];
-        ab += in[yy * width + xx].b * filter[nky * filterDim + nkx];
-      }
-    }
-  }
-
-  ar *= filterFactor;
-  ag *= filterFactor;
-  ab *= filterFactor;
-
-  ar = (ar < 0) ? 0 : ar;
-  ag = (ag < 0) ? 0 : ag;
-  ab = (ab < 0) ? 0 : ab;
-
-  out[y * width + x].r = (ar > 255) ? 255 : ar;
-  out[y * width + x].g = (ag > 255) ? 255 : ag;
-  out[y * width + x].b = (ab > 255) ? 255 : ab;
-}
-
-// Task 5
-// Apply convolutional filter on image data
-/*__global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
+// Apply convolutional filter on image data with the use of shared memory
+__global__ void applyFilter(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
 {
 
   // Now instead of using the filter directly from global memory, we want to copy the filter to shared memory.
@@ -218,7 +129,6 @@ __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int widt
   // Handle out of bounds
   if (x >= width || y >= height)
   {
-    // __syncthreads(); // ? Needed? Think so, to avoid deadlock
     return;
   }
 
@@ -246,17 +156,36 @@ __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int widt
 
       if (xx >= 0 && xx < BLOCK_DIMENSION && yy >= 0 && yy < BLOCK_DIMENSION)
       {
-        ar += shared_pixels[yy * BLOCK_DIMENSION + xx].r * shared_filter[nky * filterDim + nkx];
-        ag += shared_pixels[yy * BLOCK_DIMENSION + xx].g * shared_filter[nky * filterDim + nkx];
-        ab += shared_pixels[yy * BLOCK_DIMENSION + xx].b * shared_filter[nky * filterDim + nkx];
+        int shared_filter_value = shared_filter[nky * filterDim + nkx];
+        ar += shared_pixels[yy * BLOCK_DIMENSION + xx].r * shared_filter_value;
+        ag += shared_pixels[yy * BLOCK_DIMENSION + xx].g * shared_filter_value;
+        ab += shared_pixels[yy * BLOCK_DIMENSION + xx].b * shared_filter_value;
       }
       // Else if the normal code from task 1-4
       else if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
       {
-        ar += in[yy * width + xx].r * shared_filter[nky * filterDim + nkx];
-        ag += in[yy * width + xx].g * shared_filter[nky * filterDim + nkx];
-        ab += in[yy * width + xx].b * shared_filter[nky * filterDim + nkx];
+        int shared_filter_value = shared_filter[nky * filterDim + nkx];
+        ar += in[yy * width + xx].r * shared_filter_value;
+        ag += in[yy * width + xx].g * shared_filter_value;
+        ab += in[yy * width + xx].b * shared_filter_value;
       }
+      // if (xx >= 0 && yy >= 0)
+      // {
+      //   int shared_filter_value = shared_filter[nky * filterDim + nkx];
+      //   if (xx < BLOCK_DIMENSION && yy < BLOCK_DIMENSION)
+      //   {
+      //     ar += shared_pixels[yy * BLOCK_DIMENSION + xx].r * shared_filter_value;
+      //     ag += shared_pixels[yy * BLOCK_DIMENSION + xx].g * shared_filter_value;
+      //     ab += shared_pixels[yy * BLOCK_DIMENSION + xx].b * shared_filter_value;
+      //   }
+      //   else if (xx < (int)width && yy < (int)height)
+      //   {
+      //     // Else if the normal code from task 1-4
+      //     ar += in[yy * width + xx].r * shared_filter_value;
+      //     ag += in[yy * width + xx].g * shared_filter_value;
+      //     ab += in[yy * width + xx].b * shared_filter_value;
+      //   }
+      // }
     }
   }
 
@@ -271,7 +200,7 @@ __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int widt
   out[y * width + x].r = (ar > 255) ? 255 : ar;
   out[y * width + x].g = (ag > 255) ? 255 : ag;
   out[y * width + x].b = (ab > 255) ? 255 : ab;
-}*/
+}
 
 void help(char const *exec, char const opt, char const *optarg)
 {
@@ -415,32 +344,9 @@ int main(int argc, char **argv)
   cudaMemcpy(d_image_rawdata, image->rawdata, image_size, cudaMemcpyHostToDevice);
   cudaMemcpy(d_filter, filters[filterIndex], filter_size, cudaMemcpyHostToDevice);
 
-  // Task 6
-  // From https://developer.nvidia.com/blog/cuda-pro-tip-occupancy-api-simplifies-launch-configuration/
-  int blockSizeInt;   // The launch configurator returned block size
-  int minGridSizeInt; // The minimum grid size needed to achieve the maximum occupancy for a full device launch
-  int gridSizeInt;    // The actual grid size needed, based on input size
-
-  cudaOccupancyMaxPotentialBlockSize(&minGridSizeInt, &blockSizeInt, applyFilter_CUDA_Kernel, 0, 0);
-
-  // Round up according to array size
-  gridSizeInt = (image->width * image->height + blockSizeInt - 1) / blockSizeInt;
-
-  if (blockSizeInt % 32 != 0)
-  {
-    printf("NOTE: blockSizeInt was not a multiple of 32: %f\n", float(blockSizeInt) / 32.0);
-  }
-
-  dim3 blockSize(blockSizeInt / 32, blockSizeInt / 32);
-
-  printf("BlockSizeInt %d\n", blockSizeInt);
-  printf("minGridSizeInt %d\n", minGridSizeInt);
-  printf("gridSizeInt %d\n", gridSizeInt);
-  // End Task 6
-
   // We allocate one thread per pixel
   // gridSize and blockSize inspired from Section 2.2. in the CUDA Programming Guide
-  // dim3 blockSize(BLOCK_DIMENSION, BLOCK_DIMENSION); // Threads per block
+  dim3 blockSize(BLOCK_DIMENSION, BLOCK_DIMENSION); // Threads per block
   printf("The grid has thread blocks of dimension (%d width * %d height)\n", blockSize.x, blockSize.y);
 
   // We may need to add 1 extra block to width or height if the image's dimensions are not evenly divided by the block's dimension
@@ -458,23 +364,22 @@ int main(int argc, char **argv)
   dim3 gridSize(image->width / blockSize.x + extraWidth, image->height / blockSize.y + extraHeight); // Number of blocks
   printf("Launching a grid of dimension (%d width * %d height)\n", image->width / blockSize.x + extraWidth, image->height / blockSize.y + extraHeight);
 
+  int numBlocksPerSm = 0;
+  checkCudaErrors(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+      &numBlocksPerSm, gpuConjugateGradient, blockSize.x * blockSize.y, sMemSize));
+
   // Start time measurement
   cudaEventRecord(start_time);
 
   for (unsigned int i = 0; i < iterations; i++)
   {
-    // Task 2-3
-    applyFilter_CUDA_Kernel<<<gridSize, blockSize>>>(
-
-        // Task 5
-        // TODO Experiment with different bytes in shared memory. Share the border pixels so that we never have to access global memory for the outside bounds.
-        // int sharedMemoryUsedPerBlock = filterDims[filterIndex] * filterDims[filterIndex] * sizeof(int) + BLOCK_DIMENSION * BLOCK_DIMENSION * sizeof(pixel);
-        // applyFilter_CUDA_Kernel<<<gridSize, blockSize, sharedMemoryUsedPerBlock>>>(
+    // TODO Experiment with different bytes in shared memory. Share the border pixels so that we never have to access global memory for the outside bounds.
+    int sharedMemoryUsedPerBlock = filterDims[filterIndex] * filterDims[filterIndex] * sizeof(unsigned int) + BLOCK_DIMENSION * BLOCK_DIMENSION * sizeof(pixel);
+    applyFilter<<<gridSize, blockSize, sharedMemoryUsedPerBlock>>>(
         d_process_image_rawdata, // Out
         d_image_rawdata,         // In
         image->width,
         image->height,
-        // filters[filterIndex],
         d_filter,
         filterDims[filterIndex],
         filterFactors[filterIndex]);
@@ -500,19 +405,6 @@ int main(int argc, char **argv)
 
   cudaEventDestroy(start_time);
   cudaEventDestroy(end_time);
-
-  // Task 6
-  cudaDeviceSynchronize();
-  // calculate theoretical occupancy
-  int maxActiveBlocks;
-  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, applyFilter_CUDA_Kernel, blockSizeInt, 0);
-  int device;
-  cudaDeviceProp props;
-  cudaGetDevice(&device);
-  cudaGetDeviceProperties(&props, device);
-  float occupancy = (maxActiveBlocks * blockSizeInt / props.warpSize) / (float)(props.maxThreadsPerMultiProcessor / props.warpSize);
-  printf("Launched blocks of size %d=>(%dx%d). Theoretical occupancy: %f\n", blockSizeInt, blockSize.x, blockSize.y, occupancy);
-  // End Task 6
 
   // Check for error
   cudaError_t error = cudaPeekAtLastError();
