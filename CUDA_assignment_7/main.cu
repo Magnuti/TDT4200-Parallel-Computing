@@ -24,6 +24,84 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
   }
 }
 
+// Taken from https://github.com/pluskid/Mocha.jl/blob/master/deps/im2col.cpp#L7
+void im2col(pixel *img, pixel *col, int width, int height, int channels, int filterDim)
+{
+  //! Look over it. See https://www.researchgate.net/figure/Im2col-GEMM-converted-from-the-convolution-in-Fig-1-The-red-boxed-data-show-duplicated_fig2_332186100
+  // ! it should be laid out as columns of length width*3channels ?
+  // TODO This works on the Pixel struct. Maybe use floats instead for each RGB channel.
+  int kernel_h = filterDim / 2;
+  int kernel_w = filterDim / 2;
+  int height_col = height - kernel_h;
+  int width_col = width - kernel_w;
+  int channels_col = channels * kernel_h * kernel_w;
+
+  for (int c = 0; c < channels_col; ++c)
+  {
+    int w_offset = c % kernel_w;
+    int h_offset = (c / kernel_w) % kernel_h;
+    int c_im = c / (kernel_h * kernel_w);
+
+    for (int h = 0; h < height_col; ++h)
+    {
+      for (int w = 0; w < width_col; ++w)
+      {
+        int h_pad = h + h_offset;
+        int w_pad = w + w_offset;
+        int col_index = (c * height_col + h) * width_col + w;
+        if (h_pad >= 0 && h_pad < height && w_pad >= 0 && w_pad < width)
+        {
+          int im_index = (c_im * height + h_pad) * width + w_pad;
+          col[col_index].r = img[im_index].r;
+          col[col_index].g = img[im_index].g;
+          col[col_index].b = img[im_index].b;
+        }
+        else
+        {
+          col[col_index].r = 0;
+          col[col_index].g = 0;
+          col[col_index].b = 0;
+        }
+      }
+    }
+  }
+}
+
+// Taken from https://github.com/pluskid/Mocha.jl/blob/master/deps/im2col.cpp#L7
+void col2im(pixel *col, pixel *img, int width, int height, int channels, int filterDim)
+{
+  int kernel_h = filterDim / 2;
+  int kernel_w = filterDim / 2;
+  int height_col = height - kernel_h;
+  int width_col = width - kernel_w;
+  int channels_col = channels * kernel_h * kernel_w;
+
+  // fill(img, img + width * height * channels, 0); // ? Removed this. It sets all values of img to 0. Is it required?
+  for (int c = 0; c < channels_col; ++c)
+  {
+    int w_offset = c % kernel_w;
+    int h_offset = (c / kernel_w) % kernel_h;
+    int c_im = c / (kernel_h * kernel_w);
+
+    for (int h = 0; h < height_col; ++h)
+    {
+      for (int w = 0; w < width_col; ++w)
+      {
+        int h_pad = h + h_offset;
+        int w_pad = w + w_offset;
+        int col_index = (c * height_col + h) * width_col + w;
+        int im_index = (c_im * height + h_pad) * width + w_pad;
+        if (h_pad >= 0 && h_pad < height && w_pad >= 0 && w_pad < width)
+        {
+          img[im_index].r += col[col_index].r;
+          img[im_index].g += col[col_index].g;
+          img[im_index].b += col[col_index].b;
+        }
+      }
+    }
+  }
+}
+
 #define BLOCK_DIMENSION 16 // A thread block size of 16x16 (256 threads) is a common choice (from https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#thread-hierarchy)
 
 // Convolutional Filter Examples, each with dimension 3,
@@ -182,6 +260,10 @@ __global__ void apply_filter(pixel *out, pixel *in, unsigned int width, unsigned
   out[y * width + x].r = (ar > 255) ? 255 : ar;
   out[y * width + x].g = (ag > 255) ? 255 : ag;
   out[y * width + x].b = (ab > 255) ? 255 : ab;
+}
+
+__global__ void apply_filter_GEMM(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
+{
 }
 
 void help(char const *exec, char const opt, char const *optarg)
