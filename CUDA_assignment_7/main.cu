@@ -24,7 +24,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
   }
 }
 
-#define BLOCK_DIMENSION 16 // A thread block size of 16x16 (256 threads) is a common choice (from https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#thread-hierarchy)
+// #define BLOCK_DIMENSION 16 // A thread block size of 16x16 (256 threads) is a common choice (from https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#thread-hierarchy)
 
 // Convolutional Filter Examples, each with dimension 3,
 // gaussian filter with dimension 5
@@ -98,48 +98,6 @@ void swapImage(bmpImage **one, bmpImage **two)
   *one = helper;
 }
 
-// Apply convolutional filter on image data
-void applyFilter(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
-{
-  unsigned int const filterCenter = (filterDim / 2);
-  for (unsigned int y = 0; y < height; y++)
-  {
-    for (unsigned int x = 0; x < width; x++)
-    {
-      int ar = 0, ag = 0, ab = 0;
-      for (unsigned int ky = 0; ky < filterDim; ky++)
-      {
-        int nky = filterDim - 1 - ky;
-        for (unsigned int kx = 0; kx < filterDim; kx++)
-        {
-          int nkx = filterDim - 1 - kx;
-
-          int yy = y + (ky - filterCenter);
-          int xx = x + (kx - filterCenter);
-          if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
-          {
-            ar += in[yy * width + xx].r * filter[nky * filterDim + nkx];
-            ag += in[yy * width + xx].g * filter[nky * filterDim + nkx];
-            ab += in[yy * width + xx].b * filter[nky * filterDim + nkx];
-          }
-        }
-      }
-
-      ar *= filterFactor;
-      ag *= filterFactor;
-      ab *= filterFactor;
-
-      ar = (ar < 0) ? 0 : ar;
-      ag = (ag < 0) ? 0 : ag;
-      ab = (ab < 0) ? 0 : ab;
-
-      out[y * width + x].r = (ar > 255) ? 255 : ar;
-      out[y * width + x].g = (ag > 255) ? 255 : ag;
-      out[y * width + x].b = (ab > 255) ? 255 : ab;
-    }
-  }
-}
-
 // Task 1-4
 // Apply convolutional filter on image data
 __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int width, unsigned int height, int *filter, unsigned int filterDim, float filterFactor)
@@ -154,7 +112,7 @@ __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int widt
   }
 
   unsigned int const filterCenter = (filterDim / 2);
-  int ar = 0, ag = 0, ab = 0;
+  float ar = 0, ag = 0, ab = 0;
   for (unsigned int ky = 0; ky < filterDim; ky++)
   {
     int nky = filterDim - 1 - ky;
@@ -166,9 +124,9 @@ __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int widt
       int xx = x + (kx - filterCenter);
       if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
       {
-        ar += in[yy * width + xx].r * filter[nky * filterDim + nkx];
-        ag += in[yy * width + xx].g * filter[nky * filterDim + nkx];
-        ab += in[yy * width + xx].b * filter[nky * filterDim + nkx];
+        ar += in[yy * width + xx].r * (float)filter[nky * filterDim + nkx];
+        ag += in[yy * width + xx].g * (float)filter[nky * filterDim + nkx];
+        ab += in[yy * width + xx].b * (float)filter[nky * filterDim + nkx];
       }
     }
   }
@@ -177,13 +135,13 @@ __global__ void applyFilter_CUDA_Kernel(pixel *out, pixel *in, unsigned int widt
   ag *= filterFactor;
   ab *= filterFactor;
 
-  ar = (ar < 0) ? 0 : ar;
-  ag = (ag < 0) ? 0 : ag;
-  ab = (ab < 0) ? 0 : ab;
+  ar = (ar < 0.0) ? 0.0 : ar;
+  ag = (ag < 0.0) ? 0.0 : ag;
+  ab = (ab < 0.0) ? 0.0 : ab;
 
-  out[y * width + x].r = (ar > 255) ? 255 : ar;
-  out[y * width + x].g = (ag > 255) ? 255 : ag;
-  out[y * width + x].b = (ab > 255) ? 255 : ab;
+  out[y * width + x].r = (ar > 255.0) ? 255.0 : ar;
+  out[y * width + x].g = (ag > 255.0) ? 255.0 : ag;
+  out[y * width + x].b = (ab > 255.0) ? 255.0 : ab;
 }
 
 // Task 5

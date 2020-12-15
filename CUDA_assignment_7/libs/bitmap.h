@@ -2,23 +2,29 @@
 #define BITMAP_H
 
 typedef struct {
+  float b;
+  float g;
+  float r;
+} pixel;
+
+typedef struct {
   unsigned char b;
   unsigned char g;
   unsigned char r;
-} pixel;
+} charPixel;
 
 typedef struct {
 	unsigned int width;
 	unsigned int height;
-    pixel *rawdata;
+  pixel *rawdata;
 	pixel **data;
 } bmpImage;
 
 typedef struct {
   unsigned int width;
   unsigned int height;
-  unsigned char *rawdata;
-  unsigned char **data;
+  float *rawdata;
+  float **data;
 } bmpImageChannel;
 
 bmpImage *newBmpImage(unsigned int const width, unsigned int const height);
@@ -28,18 +34,18 @@ int saveBmpImage(bmpImage *image, char const *filename);
 
 bmpImageChannel * newBmpImageChannel(unsigned int const width, unsigned int const height);
 void freeBmpImageChannel(bmpImageChannel *imageChannel);
-int extractImageChannel(bmpImageChannel *to, bmpImage *from, unsigned char extractMethod(pixel from));
-int mapImageChannel(bmpImage *to, bmpImageChannel *from, pixel extractMethod(unsigned char from));
-pixel mapRedChannel(unsigned char from);
-unsigned char extractRedChannel(pixel from);
+int extractImageChannel(bmpImageChannel *to, bmpImage *from, float extractMethod(pixel from));
+int mapImageChannel(bmpImage *to, bmpImageChannel *from, pixel extractMethod(float from));
+pixel mapRedChannel(float from);
+float extractRedChannel(pixel from);
 
-pixel mapRed(unsigned char from);
-pixel mapGreen(unsigned char from);
-pixel mapBlue(unsigned char from);
-unsigned char extractRed(pixel from);
-unsigned char extractGreen(pixel from);
-unsigned char extractBlue(pixel from);
-unsigned char extractAverage(pixel from);
-pixel mapEqual(unsigned char from);
+pixel mapRed(float from);
+pixel mapGreen(float from);
+pixel mapBlue(float from);
+float extractRed(pixel from);
+float extractGreen(pixel from);
+float extractBlue(pixel from);
+float extractAverage(pixel from);
+pixel mapEqual(float from);
 
 #endif

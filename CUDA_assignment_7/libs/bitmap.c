@@ -78,11 +78,11 @@ void freeBmpImageChannel(bmpImageChannel *image) {
 int reallocateBmpChannelBuffer(bmpImageChannel *image, unsigned int const width, unsigned int const height) {
 	freeBmpChannelData(image);
 	if (height * width > 0) {
-		image->rawdata = calloc(image->height * image->width, sizeof(unsigned char));
+		image->rawdata = calloc(image->height * image->width, sizeof(float));
 		if (image->rawdata == NULL) {
 			return 1;
 		}
-		image->data = malloc(image->height * sizeof(unsigned char *));
+		image->data = malloc(image->height * sizeof(float *));
 		if (image->data == NULL) {
 			freeBmpChannelData(image);
 			return 1;
@@ -134,12 +134,16 @@ int loadBmpImage(bmpImage *image, char const *filename) {
 	size_t lineSize = (image->width * 3);
 	size_t paddedLineSize = lineSize + padding;
 	unsigned char* data = malloc(paddedLineSize * sizeof(unsigned char));
+	float* float_data = malloc(paddedLineSize * sizeof(float));
 
 	for (unsigned int y=0; y < image->height; y++ ) {
 		if (fread( data, sizeof(unsigned char), paddedLineSize, fImage) < paddedLineSize) {
 			goto failed_read;
 		}
-		memcpy(image->data[y], data, lineSize);
+		for(unsigned int i = 0; i < paddedLineSize; i++) {
+			float_data[i] = (float)(data[i]);
+		}
+		memcpy(image->data[y], float_data, lineSize);
 	}
 	ret = 0;
 failed_read:
@@ -156,8 +160,8 @@ int saveBmpImage(bmpImage *image, char const *filename) {
 	}
 
 	char padBuffer[4] = {};
-	const size_t dataSize = image->width * image->height * sizeof(pixel);
-	size_t lineWidth = image->width * sizeof(pixel);
+	const size_t dataSize = image->width * image->height * sizeof(charPixel); // ! sizeof(pixel) ?
+	size_t lineWidth = image->width * sizeof(charPixel); // ! sizeof(pixel) ?
 	size_t padding = 0;
 	if (lineWidth % 4 != 0) {
 		padding = 4 - (lineWidth % 4);
@@ -175,8 +179,19 @@ int saveBmpImage(bmpImage *image, char const *filename) {
 	if (fwrite(header, sizeof(unsigned char), BMP_HEADER_SIZE,fImage) < BMP_HEADER_SIZE) {
 		ret = 1;
 	} else {
+		charPixel* dataToWrite = malloc(sizeof(charPixel) * image->width);
 		for (unsigned int i = 0; i < image->height; i++) {
-			if (fwrite(image->data[i], sizeof(pixel), image->width ,fImage) < image->width)  {
+			for(unsigned int w = 0; w < image->width; w++){
+				pixel pixelValue = image->data[i][w];
+				// charPixel cp = {.r = (int)pixelValue.r, .g = (int)pixelValue.g, .b = (int)pixelValue.b};
+				charPixel cp = {};
+				cp.r = (int)pixelValue.r;
+				cp.g = (int)pixelValue.g;
+				cp.b = (int)pixelValue.b;
+				dataToWrite[w] = cp;
+			}
+			// if (fwrite(image->data[i], sizeof(pixel), image->width ,fImage) < image->width)  {
+			if (fwrite(dataToWrite, sizeof(charPixel), image->width ,fImage) < image->width)  {
 				ret = 1;
 				break;
 			}
@@ -192,7 +207,7 @@ int saveBmpImage(bmpImage *image, char const *filename) {
 	return ret;
 }
 
-int extractImageChannel(bmpImageChannel *to, bmpImage *from, unsigned char extractMethod(pixel from)) {
+int extractImageChannel(bmpImageChannel *to, bmpImage *from, float extractMethod(pixel from)) {
 	if (from->width > to->width || from->height > to->height)
 		return 1;
 	for (unsigned int y = 0; y < from->height; y++) {
@@ -202,7 +217,7 @@ int extractImageChannel(bmpImageChannel *to, bmpImage *from, unsigned char extra
 	}
 	return 0;
 }
-int mapImageChannel(bmpImage *to, bmpImageChannel *from, pixel extractMethod(unsigned char from)) {
+int mapImageChannel(bmpImage *to, bmpImageChannel *from, pixel extractMethod(float from)) {
 	if (from->width > to->width || from->height > to->height)
 		return 1;
 	for (unsigned int y = 0; y < from->height; y++) {
@@ -213,37 +228,37 @@ int mapImageChannel(bmpImage *to, bmpImageChannel *from, pixel extractMethod(uns
 	return 0;
 }
 
-pixel mapRed(unsigned char from) {
+pixel mapRed(float from) {
 	pixel res = {};
 	res.r = from;
 	return res;
 }
-pixel mapGreen(unsigned char from) {
+pixel mapGreen(float from) {
 	pixel res = {};
 	res.g = from;
 	return res;
 }
-pixel mapBlue(unsigned char from) {
+pixel mapBlue(float from) {
 	pixel res = {};
 	res.b = from;
 	return res;
 }
 
-unsigned char extractRed(pixel from) {
+float extractRed(pixel from) {
 	return from.r;
 }
-unsigned char extractGreen(pixel from) {
+float extractGreen(pixel from) {
 	return from.g;
 }
-unsigned char extractBlue(pixel from) {
+float extractBlue(pixel from) {
 	return from.b;
 }
 
-unsigned char extractAverage(pixel from) {
+float extractAverage(pixel from) {
 	return ((from.r + from.g + from.b) / 3);
 }
 
-pixel mapEqual(unsigned char from) {
+pixel mapEqual(float from) {
 	pixel res = {from, from, from};
 	return res;
 }
