@@ -80,6 +80,8 @@ int *const filters[] = {sobelYFilter, sobelXFilter, laplacian1Filter, laplacian2
 unsigned int const filterDims[] = {3, 3, 3, 3, 3, 5};
 // float const filterFactors[] = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0 / 256.0}; // TODO ?
 
+const unsigned int MAX_GRID_DIMENSION = 65535;
+
 const unsigned int numberOfChannels = 3;
 
 // Hardcoded selected filters for now
@@ -354,7 +356,6 @@ __global__ void apply_filter(pixel *out, pixel *in, unsigned int width, unsigned
 // __global__ void apply_filter_GEMM(bmpImage *out, bmpImage *in, int *filters, int numberOfFilters, unsigned int filterDim, unsigned int filterSize, float filterFactor)
 __global__ void apply_filter_GEMM(half *a, half *b, float *c, int M, int N, int K, float alpha, float beta)
 {
-  // ! Furthermore, the note the difference between char, float and half...
   // Leading dimensions. Packed with no transpositions.
   int lda = M;
   int ldb = K;
@@ -545,17 +546,25 @@ int main(int argc, char **argv)
   unsigned char *tempImageCol = (unsigned char *)malloc(tempImageColLength * sizeof(unsigned char));
   im2col(image->rawdata, tempImageCol, image->width, image->height, filterDim);
 
-  unsigned char *imageCol = (unsigned char *)malloc(MATRIX_K * MATRIX_N * sizeof(unsigned char));
-  buildImageArray(imageCol, tempImageCol, tempImageColLength);
+  unsigned char *imageColChar = (unsigned char *)malloc(MATRIX_K * MATRIX_N * sizeof(unsigned char));
+  buildImageArray(imageColChar, tempImageCol, tempImageColLength);
 
   free(tempImageCol);
+
+  float *imageCol = (float *)malloc(MATRIX_K * MATRIX_N * sizeof(float));
+  for (int i = 0; i < MATRIX_K * MATRIX_N; i++)
+  {
+    imageCol[i] = (float)imageColChar[i];
+  }
+
+  free(imageColChar);
 
   printf("Apply filters ");
   for (size_t i = 0; i < sizeof(filterIndexes) / sizeof(filterIndexes[0]); i++)
   {
-    printf("%s", filterNames[i]);
+    printf("%s ", filterNames[i]);
   }
-  printf(" on image with %u x %u pixels for %u iterations\n", image->width, image->height, iterations);
+  printf("on image with %u x %u pixels for %u iterations\n", image->width, image->height, iterations);
 
   // Time measurement init
   // Inspired from https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/
@@ -607,7 +616,6 @@ int main(int argc, char **argv)
   float *b_fp32;      // Image temp
   half *a_fp16;       // Filter
   half *b_fp16;       // Image array
-  float *c;           // ? What is this?
   float *c_wmma;      // Device answer array
   float *c_host_wmma; // Host answer array
 
@@ -616,7 +624,6 @@ int main(int argc, char **argv)
   cudaErrCheck(cudaMalloc((void **)&a_fp16, MATRIX_M * MATRIX_K * sizeof(half)));
   cudaErrCheck(cudaMalloc((void **)&b_fp16, MATRIX_K * MATRIX_N * sizeof(half)));
 
-  cudaErrCheck(cudaMalloc((void **)&c, MATRIX_M * MATRIX_N * sizeof(float)));
   cudaErrCheck(cudaMalloc((void **)&c_wmma, MATRIX_M * MATRIX_N * sizeof(float)));
 
   c_host_wmma = (float *)malloc(MATRIX_M * MATRIX_N * sizeof(float));
@@ -628,19 +635,30 @@ int main(int argc, char **argv)
   // curandErrCheck(curandSetPseudoRandomGeneratorSeed(gen, 1337ULL));
 
   // TODO fill a_fp32 and b_fp32 with numbers instead of curandGenerator stuff
+  cudaErrCheck(cudaMemcpy(a_fp32, filterCol, MATRIX_M * MATRIX_K * sizeof(float), cudaMemcpyHostToDevice));
+  cudaErrCheck(cudaMemcpy(b_fp32, imageCol, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
 
   // curandErrCheck(curandGenerateUniform(gen, a_fp32, MATRIX_M * MATRIX_K));
   // curandErrCheck(curandGenerateUniform(gen, b_fp32, MATRIX_K * MATRIX_N));
 
   // curand doesn't currently support fp16 so we generate in fp32 and convert to fp16.
+  // printf("Float to half ?\n");
+  printf("Float to half kernel launch with grid dim %d, block dim %d\n", (MATRIX_M * MATRIX_K + 255) / 256, 256);
   convertFp32ToFp16<<<(MATRIX_M * MATRIX_K + 255) / 256, 256>>>(a_fp16, a_fp32, MATRIX_M * MATRIX_K);
+  printf("Float to half kernel launch with grid dim %d, block dim %d\n", (MATRIX_K * MATRIX_N + 255) / 256, 256);
   convertFp32ToFp16<<<(MATRIX_K * MATRIX_N + 255) / 256, 256>>>(b_fp16, b_fp32, MATRIX_K * MATRIX_N);
+  // printf("Float to half done!\n");
+  cudaErrCheck(cudaDeviceSynchronize()); // ? Required?
+
+  for (int i = 0; i < MATRIX_M * MATRIX_N; i++)
+  {
+    c_host_wmma[i] = 0.0f;
+  }
+  cudaErrCheck(cudaMemcpy(c_wmma, c_host_wmma, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
 
   // curandErrCheck(curandGenerateUniform(gen, c, MATRIX_M * MATRIX_N));
 
   // curandErrCheck(curandDestroyGenerator(gen));
-
-  cudaErrCheck(cudaMemcpy(c_wmma, c, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyDeviceToDevice));
 
   dim3 gridDim;
   dim3 blockDim;
@@ -653,39 +671,91 @@ int main(int argc, char **argv)
   gridDim.x = (MATRIX_M + (WMMA_M * blockDim.x / 32 - 1)) / (WMMA_M * blockDim.x / 32);
   gridDim.y = (MATRIX_N + WMMA_N * blockDim.y - 1) / (WMMA_N * blockDim.y);
 
+  // ! 145875 in x direction...
+  if (gridDim.x >= MAX_GRID_DIMENSION || gridDim.y >= MAX_GRID_DIMENSION)
+  {
+    printf("Invalid grid dimensions.\n");
+    return 1;
+  }
+
   // TODO remove
   float alpha = 1.0f;
   float beta = 1.0f;
 
+  printf("Launching a kernel with grid dim: %dx%d and block dimension of (%dx%d)\n", gridDim.x, gridDim.y, blockDim.x, blockDim.y);
+
   // Start time measurement
   cudaEventRecord(start_time);
 
-  for (unsigned int i = 0; i < iterations; i++)
+  // for (unsigned int i = 0; i < iterations; i++)
+  // {
+  // int sharedMemoryUsedPerBlock = numberOfFiltersUsed * usedFilterDimension * usedFilterDimension * sizeof(int) + BLOCK_DIMENSION * BLOCK_DIMENSION * sizeof(pixel);
+  // apply_filter<<<gridSize, blockSize, sharedMemoryUsedPerBlock>>>(
+  //     d_process_image_rawdata, // Out
+  //     d_image_rawdata,         // In
+  //     image->width,
+  //     image->height,
+  //     // filters[filterIndex],
+  //     d_filters,
+  //     numberOfFiltersUsed,
+  //     usedFilterDimension,
+  //     filter_size,
+  //     usedFilterFactor);
+
+  // ? Do I need to pass in WMMA_M, _n, _k?
+  printf("WMMA kernel launch?\n");
+  apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16, c_wmma, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
+  cudaErrCheck(cudaDeviceSynchronize()); // ? Required?
+  printf("WMMA kernel launch!\n");
+  // swapImage(&processImage, &image);
+  // swapImageRawdata(&d_process_image_rawdata, &d_image_rawdata);
+  // }
+
+  // Check for error
+  cudaError_t error = cudaPeekAtLastError();
+  if (error)
   {
-    // int sharedMemoryUsedPerBlock = numberOfFiltersUsed * usedFilterDimension * usedFilterDimension * sizeof(int) + BLOCK_DIMENSION * BLOCK_DIMENSION * sizeof(pixel);
-    // apply_filter<<<gridSize, blockSize, sharedMemoryUsedPerBlock>>>(
-    //     d_process_image_rawdata, // Out
-    //     d_image_rawdata,         // In
-    //     image->width,
-    //     image->height,
-    //     // filters[filterIndex],
-    //     d_filters,
-    //     numberOfFiltersUsed,
-    //     usedFilterDimension,
-    //     filter_size,
-    //     usedFilterFactor);
-
-    // ? Do I need to pass in WMMA_M, _n, _k?
-    apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16, c_wmma, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
-
-    // swapImage(&processImage, &image);
-    // swapImageRawdata(&d_process_image_rawdata, &d_image_rawdata);
+    fprintf(stderr, "Error after kernel launch!: %s\n", cudaGetErrorString(error));
   }
 
   // End time measurement
   cudaEventRecord(end_time);
 
   cudaErrCheck(cudaMemcpy(c_host_wmma, c_wmma, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // TODO clean this lol
+  pixel *finalImageRawData0 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
+  pixel *finalImageRawData1 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
+  pixel *finalImageRawData2 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
+  pixel *finalImageRawData3 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
+  pixel *finalImageRawData4 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
+  for (int m = 0; m < DESIRED_M; m++)
+  {
+    for (int n = 0; n < DESIRED_N; n++)
+    {
+      unsigned char value = (unsigned char)(c_host_wmma[m * DESIRED_N + n] / 3); // TODO try to divide by 3
+      switch (m)
+      {
+      case 0:
+        finalImageRawData0[n] = (pixel){.b = value, .g = value, .r = value};
+        break;
+      case 1:
+        finalImageRawData1[n] = (pixel){.b = value, .g = value, .r = value};
+        break;
+      case 2:
+        finalImageRawData2[n] = (pixel){.b = value, .g = value, .r = value};
+        break;
+      case 3:
+        finalImageRawData3[n] = (pixel){.b = value, .g = value, .r = value};
+        break;
+      case 4:
+        finalImageRawData4[n] = (pixel){.b = value, .g = value, .r = value};
+        break;
+      default:
+        break;
+      }
+    }
+  }
 
   // cudaMemcpy(image->rawdata, d_image_rawdata, image_size, cudaMemcpyDeviceToHost);
 
@@ -703,16 +773,61 @@ int main(int argc, char **argv)
   cudaEventDestroy(end_time);
 
   // Check for error
-  cudaError_t error = cudaPeekAtLastError();
+  error = cudaPeekAtLastError();
   if (error)
   {
     fprintf(stderr, "A CUDA error has occurred while cracking: %s\n", cudaGetErrorString(error));
   }
 
   //Write the image back to disk
-  if (saveBmpImage(image, output) != 0)
+  // if (saveBmpImage(image, output) != 0)
+  // {
+  //   fprintf(stderr, "Could not save output to '%s'!\n", output);
+  //   freeBmpImage(image);
+  //   error_exit(&input, &output);
+  // };
+  memcpy(image->rawdata, finalImageRawData0, image->width * image->height);
+  char outputName[11] = "wmma_x.bmp";
+  strcpy(outputName, "wmma_0.bmp");
+  if (saveBmpImage(image, outputName) != 0)
   {
-    fprintf(stderr, "Could not save output to '%s'!\n", output);
+    fprintf(stderr, "Could not save output to '%s'!\n", outputName);
+    freeBmpImage(image);
+    error_exit(&input, &output);
+  };
+
+  memcpy(image->rawdata, finalImageRawData1, image->width * image->height);
+  strcpy(outputName, "wmma_1.bmp");
+  if (saveBmpImage(image, outputName) != 0)
+  {
+    fprintf(stderr, "Could not save output to '%s'!\n", outputName);
+    freeBmpImage(image);
+    error_exit(&input, &output);
+  };
+
+  memcpy(image->rawdata, finalImageRawData2, image->width * image->height);
+  strcpy(outputName, "wmma_2.bmp");
+  if (saveBmpImage(image, outputName) != 0)
+  {
+    fprintf(stderr, "Could not save output to '%s'!\n", outputName);
+    freeBmpImage(image);
+    error_exit(&input, &output);
+  };
+
+  memcpy(image->rawdata, finalImageRawData3, image->width * image->height);
+  strcpy(outputName, "wmma_3.bmp");
+  if (saveBmpImage(image, outputName) != 0)
+  {
+    fprintf(stderr, "Could not save output to '%s'!\n", outputName);
+    freeBmpImage(image);
+    error_exit(&input, &output);
+  };
+
+  memcpy(image->rawdata, finalImageRawData4, image->width * image->height);
+  strcpy(outputName, "wmma_4.bmp");
+  if (saveBmpImage(image, outputName) != 0)
+  {
+    fprintf(stderr, "Could not save output to '%s'!\n", outputName);
     freeBmpImage(image);
     error_exit(&input, &output);
   };
