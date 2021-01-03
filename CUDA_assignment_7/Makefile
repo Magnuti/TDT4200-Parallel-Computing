@@ -19,7 +19,8 @@ endif
 .PHONY: clean
 
 main: $(LIBS) $(SRC)
-	$(CC) $(FLAGS) $(LIBS) $(SRC) -o main
+	$(CC) -arch=sm_75 $(FLAGS) $(LIBS) $(SRC) -o main
+	# $(CC) -arch=compute_75 -code=sm_75 $(FLAGS) $(LIBS) $(SRC) -o main
 
 clean:
 	rm -Rf main.o
