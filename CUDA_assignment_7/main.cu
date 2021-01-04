@@ -5,11 +5,10 @@
 #include <stdlib.h>
 #include <time.h>
 
-// #include <cuda_runtime_api.h> // ? required??
 #include <cuda_fp16.h>
 #include <mma.h> // CUDA WMMA API
 
-using namespace nvcuda; // C++ stuff
+using namespace nvcuda;
 
 extern "C"
 {
@@ -30,7 +29,6 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
   }
 }
 
-// TODO remove one of cudaErr.. or cudaError..
 // Define some error checking macros.
 #define cudaErrCheck(stat)                     \
   {                                            \
@@ -79,7 +77,7 @@ int gaussianFilter[] = {1, 4, 6, 4, 1,
 const char *filterNames[] = {"SobelY", "SobelX", "Laplacian 1", "Laplacian 2", "Laplacian 3", "Gaussian"};
 int *const filters[] = {sobelYFilter, sobelXFilter, laplacian1Filter, laplacian2Filter, laplacian3Filter, gaussianFilter};
 unsigned int const filterDims[] = {3, 3, 3, 3, 3, 5};
-// float const filterFactors[] = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0 / 256.0}; // TODO ?
+// float const filterFactors[] = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0 / 256.0}; // Not used in this case
 
 const unsigned int MAX_GRID_DIMENSION = 65535;
 
@@ -507,7 +505,6 @@ int main(int argc, char **argv)
       exit(1);
     }
   }
-  // const float usedFilterFactor = filterFactors[filterIndexes[0]]; // TODO
 
   float *filterCol = (float *)malloc(MATRIX_M * MATRIX_K * sizeof(float));
   buildFilterArray(filterCol);
@@ -685,19 +682,17 @@ int main(int argc, char **argv)
   gridDim.x = (MATRIX_M + (WMMA_M * blockDim.x / 32 - 1)) / (WMMA_M * blockDim.x / 32);
   gridDim.y = (MATRIX_N + WMMA_N * blockDim.y - 1) / (WMMA_N * blockDim.y);
 
-  // TODO remove
-  float alpha = 1.0f;
-  float beta = 1.0f;
-
-  printf("Launching a kernel with grid dim: %dx%d and block dimension of (%dx%d)\n", gridDim.x, gridDim.y, blockDim.x, blockDim.y);
-
   if (gridDim.y >= MAX_GRID_DIMENSION)
   {
-    // TODO quick fix
+    // Quick fix
     gridDim.x *= 3;
     gridDim.y = gridDim.y / 3;
-    printf("INSTEAD: Launching a kernel with grid dim: %dx%d and block dimension of (%dx%d)\n", gridDim.x, gridDim.y, blockDim.x, blockDim.y);
   }
+
+  float alpha = 1.0f;
+  float beta = 0.0f;
+
+  printf("Launching a kernel with grid dim: %dx%d and block dimension of (%dx%d)\n", gridDim.x, gridDim.y, blockDim.x, blockDim.y);
 
   if (gridDim.x >= MAX_GRID_DIMENSION || gridDim.y >= MAX_GRID_DIMENSION)
   {
