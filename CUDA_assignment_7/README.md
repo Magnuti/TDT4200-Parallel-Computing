@@ -6,8 +6,10 @@ This assignment is a further improvement of `Assignment_5`.
 
 ```
 make main
-./main -k [kernel] -i [iterations] before.bmp [outputname.bmp]
+./main -i [iterations] before.bmp [outputname.bmp]
 ```
+
+Note that `-k [kernel]` is not supported. They are hardcoded for now.
 
 ## Task C Tensor cores and convolution as GEMM
 
