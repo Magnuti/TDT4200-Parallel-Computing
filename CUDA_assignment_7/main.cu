@@ -379,6 +379,7 @@ __global__ void apply_filter_GEMM(half *a, half *b, float *c, int M, int N, int 
 
 __host__ void floatToHalf(half *out, float *in, int n)
 {
+  // TODO replace by a kernel launch instead. It is slow and can be parallelized.
   for (int i = 0; i < n; i++)
   {
     out[i] = __float2half(in[i]);
@@ -573,13 +574,12 @@ int main(int argc, char **argv)
   half *b_fp16_g_host = (half *)malloc(MATRIX_K * MATRIX_N * sizeof(half));
   half *b_fp16_b_host = (half *)malloc(MATRIX_K * MATRIX_N * sizeof(half));
 
-  printf("To half?\n");
+  printf("Converting to halves...\n");
   // Convert float to halves, could also be done more efficiently on the GPU, but this is a simple solution.
   floatToHalf(a_fp16_host, filterCol, MATRIX_M * MATRIX_K);
   floatToHalf(b_fp16_r_host, imageCol_r, MATRIX_K * MATRIX_N);
   floatToHalf(b_fp16_g_host, imageCol_g, MATRIX_K * MATRIX_N);
   floatToHalf(b_fp16_b_host, imageCol_b, MATRIX_K * MATRIX_N);
-  printf("To half!\n");
 
   // All taken from https://github.com/NVIDIA-developer-blog/code-samples/blob/master/posts/tensor-cores/simpleTensorCoreGEMM.cu
   // float *a_fp32;        // Filter temp
@@ -620,12 +620,11 @@ int main(int argc, char **argv)
   c_host_wmma_g = (float *)calloc(sizeof(float), MATRIX_M * MATRIX_N);
   c_host_wmma_b = (float *)calloc(sizeof(float), MATRIX_M * MATRIX_N);
 
-  printf("Copying over halves?\n");
+  printf("Copying over halves...\n");
   cudaErrCheck(cudaMemcpy(a_fp16, a_fp16_host, MATRIX_M * MATRIX_K * sizeof(half), cudaMemcpyHostToDevice));
   cudaErrCheck(cudaMemcpy(b_fp16_r, b_fp16_r_host, MATRIX_K * MATRIX_N * sizeof(half), cudaMemcpyHostToDevice));
   cudaErrCheck(cudaMemcpy(b_fp16_g, b_fp16_g_host, MATRIX_K * MATRIX_N * sizeof(half), cudaMemcpyHostToDevice));
   cudaErrCheck(cudaMemcpy(b_fp16_b, b_fp16_b_host, MATRIX_K * MATRIX_N * sizeof(half), cudaMemcpyHostToDevice));
-  printf("Copying over halves!\n");
 
   // cudaErrCheck(cudaMemcpy(b_fp32_r, imageCol_r, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
   // cudaErrCheck(cudaMemcpy(b_fp32_g, imageCol_g, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
@@ -703,12 +702,10 @@ int main(int argc, char **argv)
   // Start time measurement
   cudaEventRecord(start_time);
 
-  printf("WMMA kernel launch?\n");
   apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16_r, c_wmma_r, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
   apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16_g, c_wmma_g, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
   apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16_b, c_wmma_b, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
   cudaErrCheck(cudaDeviceSynchronize()); // ? Required?
-  printf("WMMA kernel launch!\n");
 
   // End time measurement
   cudaEventRecord(end_time);
@@ -720,12 +717,11 @@ int main(int argc, char **argv)
     fprintf(stderr, "Error after kernel launch!: %s\n", cudaGetErrorString(error));
   }
 
-  printf("Copying to host?\n");
+  printf("Copying to host...\n");
   // We only copy over the stuff we need, which is DESIRED_M * DESIRED_N
   cudaErrCheck(cudaMemcpy(c_host_wmma_r, c_wmma_r, DESIRED_M * DESIRED_N * sizeof(float), cudaMemcpyDeviceToHost));
   cudaErrCheck(cudaMemcpy(c_host_wmma_g, c_wmma_g, DESIRED_M * DESIRED_N * sizeof(float), cudaMemcpyDeviceToHost));
   cudaErrCheck(cudaMemcpy(c_host_wmma_b, c_wmma_b, DESIRED_M * DESIRED_N * sizeof(float), cudaMemcpyDeviceToHost));
-  printf("Copying to host!\n");
 
   // numberOfFiltersUsed * image->width * image->height == DESIRED_M * DESIRED_N
   pixel *finalImagesRawData = (pixel *)malloc(DESIRED_M * DESIRED_N * sizeof(pixel));

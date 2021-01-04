@@ -45,6 +45,6 @@ In the resulting matrix, we only use the 5x9336000 submatrix, not the entire 16x
 
 ### Discussion
 
-As you can see on the output images they are not correct. Unfortunately, I did not have time to find the cause of this bug as I started too late on the assignment... Nevertheless, I hope that you are able to understand my attempt on a solution to this GEMM problem, and hopefully you spot the bug rightaway!
+As you can see on the output images they are not correct, but the do contain the correct internal structure even though the colours are messed up. Unfortunately, I did not have time to find the cause of this bug as I started too late on the assignment... Nevertheless, I hope that you are able to understand my attempt on a solution to this GEMM problem, and hopefully you spot the bug rightaway!
 
-Could the 0 padding be removed to get a more efficient matrix multiplication? Perhaps and hopefully? As far as I understood `wmma`, the dimensions must be multiplies of 16, leading to a lot of wasted computation as seen in this case. I would like to see a solution which does not use padding!
+Could the 0 padding be removed to get a more efficient matrix multiplication? Perhaps and hopefully. As far as I understood `wmma`, the dimensions must be multiplies of 16, leading to a lot of wasted computation as seen in this case. I would like to see a solution which does not use padding!
