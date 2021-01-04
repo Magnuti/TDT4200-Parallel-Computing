@@ -732,17 +732,19 @@ int main(int argc, char **argv)
   cudaErrCheck(cudaMemcpy(c_host_wmma_b, c_wmma_b, DESIRED_M * DESIRED_N * sizeof(float), cudaMemcpyDeviceToHost));
   printf("Copying to host!\n");
 
-  // TODO clean this lol
-  pixel *finalImageRawData0 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
-  pixel *finalImageRawData1 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
-  pixel *finalImageRawData2 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
-  pixel *finalImageRawData3 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
-  pixel *finalImageRawData4 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
-  if (DESIRED_N != image->width * image->height)
+  // numberOfFiltersUsed * image->width * image->height == DESIRED_M * DESIRED_N
+  pixel *finalImagesRawData = (pixel *)malloc(DESIRED_M * DESIRED_N * sizeof(pixel));
+  if (DESIRED_M != numberOfFiltersUsed)
   {
-    printf("wtf\n");
+    printf("Invalid DESIRED_M. Aborting.\n");
     return 1;
   }
+  if (DESIRED_N != image->width * image->height)
+  {
+    printf("Invalid DESIRED_N. Aborting.\n");
+    return 1;
+  }
+
   for (int m = 0; m < DESIRED_M; m++)
   {
     for (int n = 0; n < DESIRED_N; n++)
@@ -750,34 +752,9 @@ int main(int argc, char **argv)
       unsigned char r = (unsigned char)c_host_wmma_r[m * DESIRED_N + n];
       unsigned char g = (unsigned char)c_host_wmma_g[m * DESIRED_N + n];
       unsigned char b = (unsigned char)c_host_wmma_b[m * DESIRED_N + n];
-      pixel p = (pixel){.b = b, .g = g, .r = r}; // !
-      switch (m)
-      {
-      case 0:
-        finalImageRawData0[n] = p;
-        break;
-      case 1:
-        finalImageRawData1[n] = p;
-        break;
-      case 2:
-        finalImageRawData2[n] = p;
-        break;
-      case 3:
-        finalImageRawData3[n] = p;
-        break;
-      case 4:
-        finalImageRawData4[n] = p;
-        break;
-      default:
-        break;
-      }
+      finalImagesRawData[m * DESIRED_N + n] = (pixel){.b = b, .g = g, .r = r};
     }
   }
-
-  // cudaMemcpy(image->rawdata, d_image_rawdata, image_size, cudaMemcpyDeviceToHost);
-
-  // cudaFree(d_image_rawdata);
-  // cudaFree(d_process_image_rawdata);
 
   // Blocks CPU execution until end_time is recorded
   cudaEventSynchronize(end_time);
@@ -803,51 +780,18 @@ int main(int argc, char **argv)
   //   freeBmpImage(image);
   //   error_exit(&input, &output);
   // };
-  memcpy(image->rawdata, finalImageRawData0, image->width * image->height * sizeof(pixel));
-  char outputName[11] = "wmma_x.bmp";
-  strcpy(outputName, "wmma_0.bmp");
-  if (saveBmpImage(image, outputName) != 0)
+  for (int i = 0; i < numberOfFiltersUsed; i++)
   {
-    fprintf(stderr, "Could not save output to '%s'!\n", outputName);
-    freeBmpImage(image);
-    error_exit(&input, &output);
-  };
-
-  memcpy(image->rawdata, finalImageRawData1, image->width * image->height * sizeof(pixel));
-  strcpy(outputName, "wmma_1.bmp");
-  if (saveBmpImage(image, outputName) != 0)
-  {
-    fprintf(stderr, "Could not save output to '%s'!\n", outputName);
-    freeBmpImage(image);
-    error_exit(&input, &output);
-  };
-
-  memcpy(image->rawdata, finalImageRawData2, image->width * image->height * sizeof(pixel));
-  strcpy(outputName, "wmma_2.bmp");
-  if (saveBmpImage(image, outputName) != 0)
-  {
-    fprintf(stderr, "Could not save output to '%s'!\n", outputName);
-    freeBmpImage(image);
-    error_exit(&input, &output);
-  };
-
-  memcpy(image->rawdata, finalImageRawData3, image->width * image->height * sizeof(pixel));
-  strcpy(outputName, "wmma_3.bmp");
-  if (saveBmpImage(image, outputName) != 0)
-  {
-    fprintf(stderr, "Could not save output to '%s'!\n", outputName);
-    freeBmpImage(image);
-    error_exit(&input, &output);
-  };
-
-  memcpy(image->rawdata, finalImageRawData4, image->width * image->height * sizeof(pixel));
-  strcpy(outputName, "wmma_4.bmp");
-  if (saveBmpImage(image, outputName) != 0)
-  {
-    fprintf(stderr, "Could not save output to '%s'!\n", outputName);
-    freeBmpImage(image);
-    error_exit(&input, &output);
-  };
+    char *outputFilename = (char *)calloc(11, sizeof(char));
+    memcpy(image->rawdata, finalImagesRawData + i * DESIRED_N, DESIRED_N * sizeof(pixel));
+    sprintf(outputFilename, "img_%d.bmp", filterIndexes[i]);
+    if (saveBmpImage(image, outputFilename) != 0)
+    {
+      fprintf(stderr, "Could not save output to '%s'!\n", outputFilename);
+      freeBmpImage(image);
+      error_exit(&input, &output);
+    };
+  }
 
   graceful_exit(&input, &output);
 };
