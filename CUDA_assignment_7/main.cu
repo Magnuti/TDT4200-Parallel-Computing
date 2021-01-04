@@ -571,42 +571,18 @@ int main(int argc, char **argv)
   // each pixel is a struct of 3 unsigned char for the red, blue and green colour channel
   // bmpImage *processImage = newBmpImage(image->width, image->height);
 
-  // int image_size = image->width * image->height * sizeof(pixel);
-
-  // We could also made all filters __device__ available, but it is simple to copy over only the needed one
-  // pixel *d_image_rawdata, *d_process_image_rawdata;
-  // int *d_filters;
-
-  // cudaMalloc((void **)&d_image_rawdata, image_size); // ! * numberOfFilters ?
-  // cudaMalloc((void **)&d_process_image_rawdata, image_size * numberOfFiltersUsed);
-  // cudaMalloc((void **)&d_filters, filter_size * numberOfFiltersUsed);
-
-  // cudaMemcpy(d_image_rawdata, image->rawdata, image_size, cudaMemcpyHostToDevice);
-
-  // We allocate one thread per pixel
-  // gridSize and blockSize inspired from Section 2.2. in the CUDA Programming Guide
-  // dim3 blockSize(BLOCK_DIMENSION, BLOCK_DIMENSION); // Threads per block
-  // printf("The grid has thread blocks of dimension (%d width * %d height)\n", blockSize.x, blockSize.y);
-
-  // We may need to add 1 extra block to width or height if the image's dimensions are not evenly divided by the block's dimension
-  // int extraWidth = 0;
-  // int extraHeight = 0;
-  //
-  // if (image->width % blockSize.x != 0)
-  // {
-  //   extraWidth = 1;
-  // }
-  // if (image->height % blockSize.y != 0)
-  // {
-  //   extraHeight = 1;
-  // }
-  // dim3 gridSize(image->width / blockSize.x + extraWidth, image->height / blockSize.y + extraHeight); // Number of blocks
-  // printf("Launching a grid of dimension (%d width * %d height)\n", image->width / blockSize.x + extraWidth, image->height / blockSize.y + extraHeight);
-
   half *a_fp16_host = (half *)malloc(MATRIX_M * MATRIX_K * sizeof(half));
   half *b_fp16_r_host = (half *)malloc(MATRIX_K * MATRIX_N * sizeof(half));
   half *b_fp16_g_host = (half *)malloc(MATRIX_K * MATRIX_N * sizeof(half));
   half *b_fp16_b_host = (half *)malloc(MATRIX_K * MATRIX_N * sizeof(half));
+
+  printf("To half?\n");
+  // Convert float to halves, could also be done more efficiently on the GPU, but this is a simple solution.
+  floatToHalf(a_fp16_host, filterCol, MATRIX_M * MATRIX_K);
+  floatToHalf(b_fp16_r_host, imageCol_r, MATRIX_K * MATRIX_N);
+  floatToHalf(b_fp16_g_host, imageCol_g, MATRIX_K * MATRIX_N);
+  floatToHalf(b_fp16_b_host, imageCol_b, MATRIX_K * MATRIX_N);
+  printf("To half!\n");
 
   // All taken from https://github.com/NVIDIA-developer-blog/code-samples/blob/master/posts/tensor-cores/simpleTensorCoreGEMM.cu
   // float *a_fp32;        // Filter temp
@@ -624,13 +600,6 @@ int main(int argc, char **argv)
   float *c_host_wmma_g; // Host answer array
   float *c_host_wmma_b; // Host answer array
 
-  printf("To half?\n");
-  floatToHalf(a_fp16_host, filterCol, MATRIX_M * MATRIX_K);
-  floatToHalf(b_fp16_r_host, imageCol_r, MATRIX_K * MATRIX_N);
-  floatToHalf(b_fp16_g_host, imageCol_g, MATRIX_K * MATRIX_N);
-  floatToHalf(b_fp16_b_host, imageCol_b, MATRIX_K * MATRIX_N);
-  printf("To half!\n");
-
   // cudaErrCheck(cudaMalloc((void **)&a_fp32, MATRIX_M * MATRIX_K * sizeof(float)));
 
   // cudaErrCheck(cudaMalloc((void **)&b_fp32_r, MATRIX_K * MATRIX_N * sizeof(float)));
@@ -646,10 +615,13 @@ int main(int argc, char **argv)
   cudaErrCheck(cudaMalloc((void **)&c_wmma_r, MATRIX_M * MATRIX_N * sizeof(float)));
   cudaErrCheck(cudaMalloc((void **)&c_wmma_g, MATRIX_M * MATRIX_N * sizeof(float)));
   cudaErrCheck(cudaMalloc((void **)&c_wmma_b, MATRIX_M * MATRIX_N * sizeof(float)));
+  cudaErrCheck(cudaMemset(c_wmma_r, 0.0f, MATRIX_M * MATRIX_N * sizeof(float)));
+  cudaErrCheck(cudaMemset(c_wmma_g, 0.0f, MATRIX_M * MATRIX_N * sizeof(float)));
+  cudaErrCheck(cudaMemset(c_wmma_b, 0.0f, MATRIX_M * MATRIX_N * sizeof(float)));
 
-  c_host_wmma_r = (float *)malloc(MATRIX_M * MATRIX_N * sizeof(float));
-  c_host_wmma_g = (float *)malloc(MATRIX_M * MATRIX_N * sizeof(float));
-  c_host_wmma_b = (float *)malloc(MATRIX_M * MATRIX_N * sizeof(float));
+  c_host_wmma_r = (float *)calloc(sizeof(float), MATRIX_M * MATRIX_N);
+  c_host_wmma_g = (float *)calloc(sizeof(float), MATRIX_M * MATRIX_N);
+  c_host_wmma_b = (float *)calloc(sizeof(float), MATRIX_M * MATRIX_N);
 
   printf("Copying over halves?\n");
   cudaErrCheck(cudaMemcpy(a_fp16, a_fp16_host, MATRIX_M * MATRIX_K * sizeof(half), cudaMemcpyHostToDevice));
@@ -657,12 +629,6 @@ int main(int argc, char **argv)
   cudaErrCheck(cudaMemcpy(b_fp16_g, b_fp16_g_host, MATRIX_K * MATRIX_N * sizeof(half), cudaMemcpyHostToDevice));
   cudaErrCheck(cudaMemcpy(b_fp16_b, b_fp16_b_host, MATRIX_K * MATRIX_N * sizeof(half), cudaMemcpyHostToDevice));
   printf("Copying over halves!\n");
-
-  // curandErrCheck(curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT));
-  // curandErrCheck(curandSetPseudoRandomGeneratorSeed(gen, 1337ULL));
-
-  // Fill device memory with filter col and image col
-  // cudaErrCheck(cudaMemcpy(a_fp32, filterCol, MATRIX_M * MATRIX_K * sizeof(float), cudaMemcpyHostToDevice));
 
   // cudaErrCheck(cudaMemcpy(b_fp32_r, imageCol_r, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
   // cudaErrCheck(cudaMemcpy(b_fp32_g, imageCol_g, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
@@ -698,27 +664,6 @@ int main(int argc, char **argv)
   // convertFp32ToFp16<<<imageGridDim, imageBlockDim>>>(b_fp16_g, b_fp32_g, MATRIX_K * MATRIX_N);
   // convertFp32ToFp16<<<imageGridDim, imageBlockDim>>>(b_fp16_b, b_fp32_b, MATRIX_K * MATRIX_N);
 
-  printf("Before sync\n");
-  cudaErrCheck(cudaDeviceSynchronize()); // ? Required?
-  printf("After sync\n");
-
-  // // ? Is this required?
-  // for (int i = 0; i < MATRIX_M * MATRIX_N; i++)
-  // {
-  //   c_host_wmma_r[i] = 0.0f;
-  // }
-  // printf("red done\n");
-  // for (int i = 0; i < MATRIX_M * MATRIX_N; i++)
-  // {
-  //   c_host_wmma_g[i] = 0.0f;
-  // }
-  // printf("g done\n");
-  // for (int i = 0; i < MATRIX_M * MATRIX_N; i++)
-  // {
-  //   c_host_wmma_b[i] = 0.0f;
-  // }
-  // printf("b done\n");
-
   // printf("Before c_wmma copy\n");
   // cudaErrCheck(cudaMemcpy(c_wmma_r, c_host_wmma_r, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
   // cudaErrCheck(cudaMemcpy(c_wmma_g, c_host_wmma_g, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
@@ -748,7 +693,7 @@ int main(int argc, char **argv)
 
   if (gridDim.y >= MAX_GRID_DIMENSION)
   {
-    // TODO fix
+    // TODO quick fix
     gridDim.x *= 3;
     gridDim.y = gridDim.y / 3;
     printf("INSTEAD: Launching a kernel with grid dim: %dx%d and block dimension of (%dx%d)\n", gridDim.x, gridDim.y, blockDim.x, blockDim.y);
@@ -763,67 +708,15 @@ int main(int argc, char **argv)
   // Start time measurement
   cudaEventRecord(start_time);
 
-  // for (unsigned int i = 0; i < iterations; i++)
-  // {
-  // int sharedMemoryUsedPerBlock = numberOfFiltersUsed * usedFilterDimension * usedFilterDimension * sizeof(int) + BLOCK_DIMENSION * BLOCK_DIMENSION * sizeof(pixel);
-  // apply_filter<<<gridSize, blockSize, sharedMemoryUsedPerBlock>>>(
-  //     d_process_image_rawdata, // Out
-  //     d_image_rawdata,         // In
-  //     image->width,
-  //     image->height,
-  //     // filters[filterIndex],
-  //     d_filters,
-  //     numberOfFiltersUsed,
-  //     usedFilterDimension,
-  //     filter_size,
-  //     usedFilterFactor);
-
   printf("WMMA kernel launch?\n");
-
-  // {
-
-  //   bool empty = true;
-  //   for (int i = 0; i < MATRIX_M * MATRIX_K; i++)
-  //   {
-  //     if (a_fp16[i] != 0)
-  //     {
-  //       printf("%d\n", a_fp16[i]);
-  //       empty = false;
-  //     }
-  //   }
-  //   if (empty)
-  //   {
-  //     printf("Filter col is all 0s\n");
-  //     return 1;
-  //   }
-  // }
-
-  // {
-
-  //   bool empty = true;
-  //   for (int i = 0; i < MATRIX_K * MATRIX_N; i++)
-  //   {
-  //     if (b_fp16_r[i] != 0 || b_fp16_g[i] == 0 || b_fp16_b[i] == 0)
-  //     {
-  //       printf("%d, %d, %d\n", b_fp16_r[i], b_fp16_g[i], b_fp16_b[i]);
-  //       empty = false;
-  //     }
-  //   }
-  //   if (empty)
-  //   {
-  //     printf("Image col is all 0s\n");
-  //     return 1;
-  //   }
-  // }
-
   apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16_r, c_wmma_r, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
   apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16_g, c_wmma_g, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
   apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16_b, c_wmma_b, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
   cudaErrCheck(cudaDeviceSynchronize()); // ? Required?
   printf("WMMA kernel launch!\n");
-  // swapImage(&processImage, &image);
-  // swapImageRawdata(&d_process_image_rawdata, &d_image_rawdata);
-  // }
+
+  // End time measurement
+  cudaEventRecord(end_time);
 
   // Check for error
   cudaError_t error = cudaPeekAtLastError();
@@ -832,15 +725,10 @@ int main(int argc, char **argv)
     fprintf(stderr, "Error after kernel launch!: %s\n", cudaGetErrorString(error));
   }
 
-  // End time measurement
-  cudaEventRecord(end_time);
-
   printf("Copying to host?\n");
   // We only copy over the stuff we need, which is DESIRED_M * DESIRED_N
   cudaErrCheck(cudaMemcpy(c_host_wmma_r, c_wmma_r, DESIRED_M * DESIRED_N * sizeof(float), cudaMemcpyDeviceToHost));
-  // printf("Copying to host?\n");
   cudaErrCheck(cudaMemcpy(c_host_wmma_g, c_wmma_g, DESIRED_M * DESIRED_N * sizeof(float), cudaMemcpyDeviceToHost));
-  // printf("Copying to host?\n");
   cudaErrCheck(cudaMemcpy(c_host_wmma_b, c_wmma_b, DESIRED_M * DESIRED_N * sizeof(float), cudaMemcpyDeviceToHost));
   printf("Copying to host!\n");
 
