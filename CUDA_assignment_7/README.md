@@ -43,6 +43,10 @@ Therefore, we need a padding of 11 0s for the `mxk` matrix' columns and 7 0s for
 
 In the resulting matrix, we only use the 5x9336000 submatrix, not the entire 16x9336000 matrix.
 
+### Results
+
+The final running time is 0.010 seconds. Not bad for 5 filters! Certainly faster than our previous implementations.
+
 ### Discussion
 
 As you can see on the output images they are not correct, but the do contain the correct internal structure even though the colours are messed up. Unfortunately, I did not have time to find the cause of this bug as I started too late on the assignment... Nevertheless, I hope that you are able to understand my attempt on a solution to this GEMM problem, and hopefully you spot the bug rightaway!
