@@ -6,6 +6,7 @@
 #include <time.h>
 
 // #include <cuda_runtime_api.h> // ? required??
+#include <cuda_fp16.h>
 #include <mma.h> // CUDA WMMA API
 
 using namespace nvcuda; // C++ stuff
@@ -82,7 +83,7 @@ unsigned int const filterDims[] = {3, 3, 3, 3, 3, 5};
 
 const unsigned int MAX_GRID_DIMENSION = 65535;
 
-const unsigned int numberOfChannels = 3;
+// const unsigned int numberOfChannels = 3;
 
 // Hardcoded selected filters for now
 const unsigned int numberOfFiltersUsed = 5;
@@ -106,12 +107,11 @@ const int MATRIX_K = 16;        // I want 9 here (3x3 filter values)
 const int MATRIX_N = DESIRED_N; // It is evenly divisible by 16
 
 // im2col and col2im taken from https://github.com/pluskid/Mocha.jl/blob/master/deps/im2col.cpp#L7
-// They only work with one channel (the RGB channel is "one" for the pixel struct).
+// The function works on one channel at the time because the output image should not be only one channel.
 // Furthemore, we assume that we use a valid padding (input dim = output dim) and 1 stride.
-
 void im2col(pixel *img, unsigned char *col, int width, int height, int filterDim, int color)
 {
-  // The dimension of the col array is im_width*im_height*filter_h*filter_w*numberOfChannels
+  // The dimension of the col array is im_width*im_height*filter_h*filter_w
   int kernel_h = filterDim,  // Assuming square kernel
       kernel_w = filterDim,  // Assuming square kernel
       pad_h = filterDim / 2, // Same padding
@@ -158,9 +158,8 @@ void im2col(pixel *img, unsigned char *col, int width, int height, int filterDim
   }
 }
 
-void buildFilterArray(char *array)
+void buildFilterArray(float *array)
 {
-  // We duplicate the filters 3 times, one for each channel
   // The filter is of dimension mxk
   // The 0s padding is included in this function
   for (int i = 0; i < MATRIX_M; i++)
@@ -171,12 +170,11 @@ void buildFilterArray(char *array)
       if (i < DESIRED_M && j < DESIRED_K)
       {
         unsigned int filterIndex = filterIndexes[i];
-        unsigned int temp_j = j % (filterDim * filterDim);
-        array[arrayIndex] = filters[filterIndex][temp_j];
+        array[arrayIndex] = (float)filters[filterIndex][j];
       }
       else
       {
-        array[arrayIndex] = 0;
+        array[arrayIndex] = 0.0f;
       }
     }
   }
@@ -186,7 +184,7 @@ void buildImageArray(unsigned char *outputCol, unsigned char *inputCol, unsigned
 {
   // The image is of dimension kxn
   // This function adds the 5 0s to the colums
-  memcpy(outputCol, inputCol, intputColLength);
+  memcpy(outputCol, inputCol, intputColLength * sizeof(unsigned char));
   for (int k = 0; k < MATRIX_K - DESIRED_K; k++)
   {
     for (int n = 0; n < MATRIX_N; n++)
@@ -195,36 +193,6 @@ void buildImageArray(unsigned char *outputCol, unsigned char *inputCol, unsigned
     }
   }
 }
-
-// void seperateImageChannels(unsigned char *array, bmpImage *image)
-// {
-//   // Builds an array consisting of red1, red2, ..., green1, green2, ..., blue1, blue2, blue3, ...
-//   for (int h = 0; h < image->height; h++)
-//   {
-//     for (int w = 0; w < image->width; w++)
-//     {
-//       array[h * image->width + w] = image->data[h][w].r;
-//     }
-//   }
-
-//   for (int h = 0; h < image->height; h++)
-//   {
-//     for (int w = 0; w < image->width; w++)
-//     {
-//       int offset = image->height * image->width;
-//       array[offset + h * image->width + w] = image->data[h][w].g;
-//     }
-//   }
-
-//   for (int h = 0; h < image->height; h++)
-//   {
-//     for (int w = 0; w < image->width; w++)
-//     {
-//       int offset = image->height * image->width * 2;
-//       array[offset + h * image->width + w] = image->data[h][w].b;
-//     }
-//   }
-// }
 
 void cleanup(char **input, char **output)
 {
@@ -371,10 +339,6 @@ __global__ void apply_filter_GEMM(half *a, half *b, float *c, int M, int N, int 
   // Initialize the output to zero
   wmma::fill_fragment(acc_frag, 0.0f);
 
-  // Load the inputs
-  // wmma::load_matrix_sync(a_frag, a, 16);
-  // wmma::load_matrix_sync(b_frag, b, 16);
-
   // A*B
   // Loop over the K-dimension
   for (int i = 0; i < K; i += WMMA_K)
@@ -415,14 +379,22 @@ __global__ void apply_filter_GEMM(half *a, half *b, float *c, int M, int N, int 
   }
 }
 
-__global__ void convertFp32ToFp16(half *out, float *in, int n)
+__host__ void floatToHalf(half *out, float *in, int n)
 {
-  int idx = blockDim.x * blockIdx.x + threadIdx.x;
-  if (idx < n)
+  for (int i = 0; i < n; i++)
   {
-    out[idx] = in[idx];
+    out[i] = __float2half(in[i]);
   }
 }
+
+// __global__ void convertFp32ToFp16(half *out, float *in, int n)
+// {
+//   int idx = blockDim.x * blockIdx.x + threadIdx.x;
+//   if (idx < n)
+//   {
+//     out[idx] = in[idx];
+//   }
+// }
 
 void help(char const *exec, char const opt, char const *optarg)
 {
@@ -537,9 +509,10 @@ int main(int argc, char **argv)
   }
   // const float usedFilterFactor = filterFactors[filterIndexes[0]]; // TODO
 
-  int *filterCol = (int *)malloc(MATRIX_M * MATRIX_K * sizeof(int));
+  float *filterCol = (float *)malloc(MATRIX_M * MATRIX_K * sizeof(float));
+  buildFilterArray(filterCol);
 
-  unsigned int tempImageColLength = image->width * image->height * filterDim * filterDim * numberOfChannels;
+  unsigned int tempImageColLength = image->width * image->height * filterDim * filterDim;
   unsigned char *tempImageCol_r = (unsigned char *)malloc(tempImageColLength * sizeof(unsigned char));
   unsigned char *tempImageCol_g = (unsigned char *)malloc(tempImageColLength * sizeof(unsigned char));
   unsigned char *tempImageCol_b = (unsigned char *)malloc(tempImageColLength * sizeof(unsigned char));
@@ -630,17 +603,17 @@ int main(int argc, char **argv)
   // dim3 gridSize(image->width / blockSize.x + extraWidth, image->height / blockSize.y + extraHeight); // Number of blocks
   // printf("Launching a grid of dimension (%d width * %d height)\n", image->width / blockSize.x + extraWidth, image->height / blockSize.y + extraHeight);
 
-  // TODO fix comments
+  half *a_fp16_host = (half *)malloc(MATRIX_M * MATRIX_K * sizeof(half));
+  half *b_fp16_r_host = (half *)malloc(MATRIX_K * MATRIX_N * sizeof(half));
+  half *b_fp16_g_host = (half *)malloc(MATRIX_K * MATRIX_N * sizeof(half));
+  half *b_fp16_b_host = (half *)malloc(MATRIX_K * MATRIX_N * sizeof(half));
+
   // All taken from https://github.com/NVIDIA-developer-blog/code-samples/blob/master/posts/tensor-cores/simpleTensorCoreGEMM.cu
-  float *a_fp32_r;      // Filter temp
-  float *a_fp32_g;      // Filter temp
-  float *a_fp32_b;      // Filter temp
-  float *b_fp32_r;      // Image temp
-  float *b_fp32_g;      // Image temp
-  float *b_fp32_b;      // Image temp
-  half *a_fp16_r;       // Filter
-  half *a_fp16_g;       // Filter
-  half *a_fp16_b;       // Filter
+  // float *a_fp32;        // Filter temp
+  // float *b_fp32_r;      // Image temp
+  // float *b_fp32_g;      // Image temp
+  // float *b_fp32_b;      // Image temp
+  half *a_fp16;         // Filter
   half *b_fp16_r;       // Image array
   half *b_fp16_g;       // Image array
   half *b_fp16_b;       // Image array
@@ -651,15 +624,21 @@ int main(int argc, char **argv)
   float *c_host_wmma_g; // Host answer array
   float *c_host_wmma_b; // Host answer array
 
-  cudaErrCheck(cudaMalloc((void **)&a_fp32_r, MATRIX_M * MATRIX_K * sizeof(float)));
-  cudaErrCheck(cudaMalloc((void **)&a_fp32_g, MATRIX_M * MATRIX_K * sizeof(float)));
-  cudaErrCheck(cudaMalloc((void **)&a_fp32_b, MATRIX_M * MATRIX_K * sizeof(float)));
-  cudaErrCheck(cudaMalloc((void **)&b_fp32_r, MATRIX_K * MATRIX_N * sizeof(float)));
-  cudaErrCheck(cudaMalloc((void **)&b_fp32_g, MATRIX_K * MATRIX_N * sizeof(float)));
-  cudaErrCheck(cudaMalloc((void **)&b_fp32_b, MATRIX_K * MATRIX_N * sizeof(float)));
-  cudaErrCheck(cudaMalloc((void **)&a_fp16_r, MATRIX_M * MATRIX_K * sizeof(half)));
-  cudaErrCheck(cudaMalloc((void **)&a_fp16_g, MATRIX_M * MATRIX_K * sizeof(half)));
-  cudaErrCheck(cudaMalloc((void **)&a_fp16_b, MATRIX_M * MATRIX_K * sizeof(half)));
+  printf("To half?\n");
+  floatToHalf(a_fp16_host, filterCol, MATRIX_M * MATRIX_K);
+  floatToHalf(b_fp16_r_host, imageCol_r, MATRIX_K * MATRIX_N);
+  floatToHalf(b_fp16_g_host, imageCol_g, MATRIX_K * MATRIX_N);
+  floatToHalf(b_fp16_b_host, imageCol_b, MATRIX_K * MATRIX_N);
+  printf("To half!\n");
+
+  // cudaErrCheck(cudaMalloc((void **)&a_fp32, MATRIX_M * MATRIX_K * sizeof(float)));
+
+  // cudaErrCheck(cudaMalloc((void **)&b_fp32_r, MATRIX_K * MATRIX_N * sizeof(float)));
+  // cudaErrCheck(cudaMalloc((void **)&b_fp32_g, MATRIX_K * MATRIX_N * sizeof(float)));
+  // cudaErrCheck(cudaMalloc((void **)&b_fp32_b, MATRIX_K * MATRIX_N * sizeof(float)));
+
+  cudaErrCheck(cudaMalloc((void **)&a_fp16, MATRIX_M * MATRIX_K * sizeof(half)));
+
   cudaErrCheck(cudaMalloc((void **)&b_fp16_r, MATRIX_K * MATRIX_N * sizeof(half)));
   cudaErrCheck(cudaMalloc((void **)&b_fp16_g, MATRIX_K * MATRIX_N * sizeof(half)));
   cudaErrCheck(cudaMalloc((void **)&b_fp16_b, MATRIX_K * MATRIX_N * sizeof(half)));
@@ -672,16 +651,22 @@ int main(int argc, char **argv)
   c_host_wmma_g = (float *)malloc(MATRIX_M * MATRIX_N * sizeof(float));
   c_host_wmma_b = (float *)malloc(MATRIX_M * MATRIX_N * sizeof(float));
 
+  printf("Copying over halves?\n");
+  cudaErrCheck(cudaMemcpy(a_fp16, a_fp16_host, MATRIX_M * MATRIX_K * sizeof(half), cudaMemcpyHostToDevice));
+  cudaErrCheck(cudaMemcpy(b_fp16_r, b_fp16_r_host, MATRIX_K * MATRIX_N * sizeof(half), cudaMemcpyHostToDevice));
+  cudaErrCheck(cudaMemcpy(b_fp16_g, b_fp16_g_host, MATRIX_K * MATRIX_N * sizeof(half), cudaMemcpyHostToDevice));
+  cudaErrCheck(cudaMemcpy(b_fp16_b, b_fp16_b_host, MATRIX_K * MATRIX_N * sizeof(half), cudaMemcpyHostToDevice));
+  printf("Copying over halves!\n");
+
   // curandErrCheck(curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT));
   // curandErrCheck(curandSetPseudoRandomGeneratorSeed(gen, 1337ULL));
 
   // Fill device memory with filter col and image col
-  cudaErrCheck(cudaMemcpy(a_fp32_r, filterCol, MATRIX_M * MATRIX_K * sizeof(float), cudaMemcpyHostToDevice));
-  cudaErrCheck(cudaMemcpy(a_fp32_g, filterCol, MATRIX_M * MATRIX_K * sizeof(float), cudaMemcpyHostToDevice));
-  cudaErrCheck(cudaMemcpy(a_fp32_b, filterCol, MATRIX_M * MATRIX_K * sizeof(float), cudaMemcpyHostToDevice));
-  cudaErrCheck(cudaMemcpy(b_fp32_r, imageCol_r, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
-  cudaErrCheck(cudaMemcpy(b_fp32_g, imageCol_g, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
-  cudaErrCheck(cudaMemcpy(b_fp32_b, imageCol_b, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
+  // cudaErrCheck(cudaMemcpy(a_fp32, filterCol, MATRIX_M * MATRIX_K * sizeof(float), cudaMemcpyHostToDevice));
+
+  // cudaErrCheck(cudaMemcpy(b_fp32_r, imageCol_r, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
+  // cudaErrCheck(cudaMemcpy(b_fp32_g, imageCol_g, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
+  // cudaErrCheck(cudaMemcpy(b_fp32_b, imageCol_b, MATRIX_K * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
 
   // cudaErrCheck(cudaDeviceSynchronize());
   filterCol = NULL;
@@ -698,18 +683,20 @@ int main(int argc, char **argv)
 
   // curand doesn't currently support fp16 so we generate in fp32 and convert to fp16.
   // Convert float to half
-  int filterGridDim = (MATRIX_M * MATRIX_K + 255) / 256;
-  int filterBlockDim = 256;
-  printf("Float to half kernel launch with grid dim %d, block dim %d\n", filterGridDim, filterBlockDim);
-  convertFp32ToFp16<<<filterGridDim, filterBlockDim>>>(a_fp16_r, a_fp32_r, MATRIX_M * MATRIX_K);
-  convertFp32ToFp16<<<filterGridDim, filterBlockDim>>>(a_fp16_g, a_fp32_g, MATRIX_M * MATRIX_K);
-  convertFp32ToFp16<<<filterGridDim, filterBlockDim>>>(a_fp16_b, a_fp32_b, MATRIX_M * MATRIX_K);
-  int imageGridDim = (MATRIX_K * MATRIX_N + 255) / 256;
-  int imageBlockDim = 256;
-  printf("Float to half kernel launch with grid dim %d, block dim %d\n", imageGridDim, imageBlockDim);
-  convertFp32ToFp16<<<imageGridDim, imageBlockDim>>>(b_fp16_r, b_fp32_r, MATRIX_K * MATRIX_N);
-  convertFp32ToFp16<<<imageGridDim, imageBlockDim>>>(b_fp16_g, b_fp32_g, MATRIX_K * MATRIX_N);
-  convertFp32ToFp16<<<imageGridDim, imageBlockDim>>>(b_fp16_b, b_fp32_b, MATRIX_K * MATRIX_N);
+  // int filterGridDim = (MATRIX_M * MATRIX_K + 255) / 256;
+  // int filterBlockDim = 256;
+  // printf("Float to half kernel launch with grid dim %d, block dim %d\n", filterGridDim, filterBlockDim);
+  // // convertFp32ToFp16<<<filterGridDim, filterBlockDim>>>(a_fp16, a_fp32, MATRIX_M * MATRIX_K);
+  // toHalf(a_fp16, a_fp32, MATRIX_M * MATRIX_K);
+  // int imageGridDim = (MATRIX_K * MATRIX_N + 255) / 256;
+  // int imageBlockDim = 256;
+  // printf("Float to half kernel launch with grid dim %d, block dim %d\n", imageGridDim, imageBlockDim);
+  // toHalf(b_fp16_r, b_fp32_r, MATRIX_K * MATRIX_N);
+  // toHalf(b_fp16_g, b_fp32_g, MATRIX_K * MATRIX_N);
+  // toHalf(b_fp16_b, b_fp32_b, MATRIX_K * MATRIX_N);
+  // convertFp32ToFp16<<<imageGridDim, imageBlockDim>>>(b_fp16_r, b_fp32_r, MATRIX_K * MATRIX_N);
+  // convertFp32ToFp16<<<imageGridDim, imageBlockDim>>>(b_fp16_g, b_fp32_g, MATRIX_K * MATRIX_N);
+  // convertFp32ToFp16<<<imageGridDim, imageBlockDim>>>(b_fp16_b, b_fp32_b, MATRIX_K * MATRIX_N);
 
   printf("Before sync\n");
   cudaErrCheck(cudaDeviceSynchronize()); // ? Required?
@@ -732,11 +719,11 @@ int main(int argc, char **argv)
   // }
   // printf("b done\n");
 
-  printf("Before c_wmma copy\n");
-  cudaErrCheck(cudaMemcpy(c_wmma_r, c_host_wmma_r, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
-  cudaErrCheck(cudaMemcpy(c_wmma_g, c_host_wmma_g, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
-  cudaErrCheck(cudaMemcpy(c_wmma_b, c_host_wmma_b, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
-  printf("After c_wmma copy\n");
+  // printf("Before c_wmma copy\n");
+  // cudaErrCheck(cudaMemcpy(c_wmma_r, c_host_wmma_r, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
+  // cudaErrCheck(cudaMemcpy(c_wmma_g, c_host_wmma_g, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
+  // cudaErrCheck(cudaMemcpy(c_wmma_b, c_host_wmma_b, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyHostToDevice));
+  // printf("After c_wmma copy\n");
 
   // curandErrCheck(curandGenerateUniform(gen, c, MATRIX_M * MATRIX_N));
 
@@ -746,8 +733,8 @@ int main(int argc, char **argv)
   dim3 blockDim;
 
   // blockDim.x must be a multple of warpSize
-  // 128x4 means we have 16 warps and a block computes a 64x64 output tile
-  blockDim.x = 128;
+  // 16 warps in one block and a block computes a 64x64 output tile
+  blockDim.x = 4 * WARP_SIZE;
   blockDim.y = 4;
 
   gridDim.x = (MATRIX_M + (WMMA_M * blockDim.x / 32 - 1)) / (WMMA_M * blockDim.x / 32);
@@ -758,6 +745,14 @@ int main(int argc, char **argv)
   float beta = 1.0f;
 
   printf("Launching a kernel with grid dim: %dx%d and block dimension of (%dx%d)\n", gridDim.x, gridDim.y, blockDim.x, blockDim.y);
+
+  if (gridDim.y >= MAX_GRID_DIMENSION)
+  {
+    // TODO fix
+    gridDim.x *= 3;
+    gridDim.y = gridDim.y / 3;
+    printf("INSTEAD: Launching a kernel with grid dim: %dx%d and block dimension of (%dx%d)\n", gridDim.x, gridDim.y, blockDim.x, blockDim.y);
+  }
 
   if (gridDim.x >= MAX_GRID_DIMENSION || gridDim.y >= MAX_GRID_DIMENSION)
   {
@@ -783,11 +778,47 @@ int main(int argc, char **argv)
   //     filter_size,
   //     usedFilterFactor);
 
-  // ? Do I need to pass in WMMA_M, _n, _k?
   printf("WMMA kernel launch?\n");
-  apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16_r, b_fp16_r, c_wmma_r, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
-  apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16_g, b_fp16_g, c_wmma_g, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
-  apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16_b, b_fp16_b, c_wmma_b, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
+
+  // {
+
+  //   bool empty = true;
+  //   for (int i = 0; i < MATRIX_M * MATRIX_K; i++)
+  //   {
+  //     if (a_fp16[i] != 0)
+  //     {
+  //       printf("%d\n", a_fp16[i]);
+  //       empty = false;
+  //     }
+  //   }
+  //   if (empty)
+  //   {
+  //     printf("Filter col is all 0s\n");
+  //     return 1;
+  //   }
+  // }
+
+  // {
+
+  //   bool empty = true;
+  //   for (int i = 0; i < MATRIX_K * MATRIX_N; i++)
+  //   {
+  //     if (b_fp16_r[i] != 0 || b_fp16_g[i] == 0 || b_fp16_b[i] == 0)
+  //     {
+  //       printf("%d, %d, %d\n", b_fp16_r[i], b_fp16_g[i], b_fp16_b[i]);
+  //       empty = false;
+  //     }
+  //   }
+  //   if (empty)
+  //   {
+  //     printf("Image col is all 0s\n");
+  //     return 1;
+  //   }
+  // }
+
+  apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16_r, c_wmma_r, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
+  apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16_g, c_wmma_g, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
+  apply_filter_GEMM<<<gridDim, blockDim>>>(a_fp16, b_fp16_b, c_wmma_b, MATRIX_M, MATRIX_N, MATRIX_K, alpha, beta);
   cudaErrCheck(cudaDeviceSynchronize()); // ? Required?
   printf("WMMA kernel launch!\n");
   // swapImage(&processImage, &image);
@@ -804,9 +835,14 @@ int main(int argc, char **argv)
   // End time measurement
   cudaEventRecord(end_time);
 
-  cudaErrCheck(cudaMemcpy(c_host_wmma_r, c_wmma_r, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyDeviceToHost));
-  cudaErrCheck(cudaMemcpy(c_host_wmma_g, c_wmma_g, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyDeviceToHost));
-  cudaErrCheck(cudaMemcpy(c_host_wmma_b, c_wmma_b, MATRIX_M * MATRIX_N * sizeof(float), cudaMemcpyDeviceToHost));
+  printf("Copying to host?\n");
+  // We only copy over the stuff we need, which is DESIRED_M * DESIRED_N
+  cudaErrCheck(cudaMemcpy(c_host_wmma_r, c_wmma_r, DESIRED_M * DESIRED_N * sizeof(float), cudaMemcpyDeviceToHost));
+  // printf("Copying to host?\n");
+  cudaErrCheck(cudaMemcpy(c_host_wmma_g, c_wmma_g, DESIRED_M * DESIRED_N * sizeof(float), cudaMemcpyDeviceToHost));
+  // printf("Copying to host?\n");
+  cudaErrCheck(cudaMemcpy(c_host_wmma_b, c_wmma_b, DESIRED_M * DESIRED_N * sizeof(float), cudaMemcpyDeviceToHost));
+  printf("Copying to host!\n");
 
   // TODO clean this lol
   pixel *finalImageRawData0 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
@@ -814,6 +850,11 @@ int main(int argc, char **argv)
   pixel *finalImageRawData2 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
   pixel *finalImageRawData3 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
   pixel *finalImageRawData4 = (pixel *)malloc(image->width * image->height * sizeof(pixel));
+  if (DESIRED_N != image->width * image->height)
+  {
+    printf("wtf\n");
+    return 1;
+  }
   for (int m = 0; m < DESIRED_M; m++)
   {
     for (int n = 0; n < DESIRED_N; n++)
@@ -821,7 +862,7 @@ int main(int argc, char **argv)
       unsigned char r = (unsigned char)c_host_wmma_r[m * DESIRED_N + n];
       unsigned char g = (unsigned char)c_host_wmma_g[m * DESIRED_N + n];
       unsigned char b = (unsigned char)c_host_wmma_b[m * DESIRED_N + n];
-      pixel p = (pixel){.b = b, .g = g, .r = r};
+      pixel p = (pixel){.b = b, .g = g, .r = r}; // !
       switch (m)
       {
       case 0:
@@ -874,7 +915,7 @@ int main(int argc, char **argv)
   //   freeBmpImage(image);
   //   error_exit(&input, &output);
   // };
-  memcpy(image->rawdata, finalImageRawData0, image->width * image->height);
+  memcpy(image->rawdata, finalImageRawData0, image->width * image->height * sizeof(pixel));
   char outputName[11] = "wmma_x.bmp";
   strcpy(outputName, "wmma_0.bmp");
   if (saveBmpImage(image, outputName) != 0)
@@ -884,7 +925,7 @@ int main(int argc, char **argv)
     error_exit(&input, &output);
   };
 
-  memcpy(image->rawdata, finalImageRawData1, image->width * image->height);
+  memcpy(image->rawdata, finalImageRawData1, image->width * image->height * sizeof(pixel));
   strcpy(outputName, "wmma_1.bmp");
   if (saveBmpImage(image, outputName) != 0)
   {
@@ -893,7 +934,7 @@ int main(int argc, char **argv)
     error_exit(&input, &output);
   };
 
-  memcpy(image->rawdata, finalImageRawData2, image->width * image->height);
+  memcpy(image->rawdata, finalImageRawData2, image->width * image->height * sizeof(pixel));
   strcpy(outputName, "wmma_2.bmp");
   if (saveBmpImage(image, outputName) != 0)
   {
@@ -902,7 +943,7 @@ int main(int argc, char **argv)
     error_exit(&input, &output);
   };
 
-  memcpy(image->rawdata, finalImageRawData3, image->width * image->height);
+  memcpy(image->rawdata, finalImageRawData3, image->width * image->height * sizeof(pixel));
   strcpy(outputName, "wmma_3.bmp");
   if (saveBmpImage(image, outputName) != 0)
   {
@@ -911,7 +952,7 @@ int main(int argc, char **argv)
     error_exit(&input, &output);
   };
 
-  memcpy(image->rawdata, finalImageRawData4, image->width * image->height);
+  memcpy(image->rawdata, finalImageRawData4, image->width * image->height * sizeof(pixel));
   strcpy(outputName, "wmma_4.bmp");
   if (saveBmpImage(image, outputName) != 0)
   {
